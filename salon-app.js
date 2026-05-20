@@ -1647,6 +1647,68 @@ function sanitizeImportNotes(s, max = 1500) {
   if (o.length > max) o = o.slice(0, max) + '…';
   return o.trim();
 }
+/** Alleen RTF ruis verwijderen voor datumparsing uit notities – niet verkorten. */
+function stripRoughRtfForNotes(raw) {
+  let o = String(raw || '');
+  if (o.includes('{\\rtf') || /\brtf1\b/i.test(o)) {
+    o = o.replace(/\\'[0-9a-f]{2}/gi, ' ')
+      .replace(/\\par ?/gi, '\n')
+      .replace(/[{}\\]+/g, ' ')
+      .replace(/ +/g, ' ')
+      .replace(/\n{3,}/g, '\n\n');
+  }
+  return o;
+}
+/** Nederlandse maand voor vrije datum "6 april 2010". */
+const NL_NOTE_MONTH_FROM_WORD = /** @type {Record<string, number>} */ ({
+  jan: 1, januari: 1, feb: 2, februari: 2, mrt: 3, maart: 3,
+  apr: 4, april: 4, mei: 5, jun: 6, juni: 6,
+  jul: 7, juli: 7, aug: 8, augustus: 8,
+  sep: 9, sept: 9, september: 9,
+  okt: 10, oct: 10, oktober: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+});
+/** Datum uit notities als jjjj-mm-dd (Europees d-m-(jj)jj). */
+function isoFromLooseDdMmY(ddStr, mmStr, yyRaw) {
+  const d = parseInt(ddStr, 10);
+  const mo = parseInt(mmStr, 10);
+  let y = parseInt(yyRaw, 10);
+  if (Number.isNaN(d) || Number.isNaN(mo) || Number.isNaN(y)) return '';
+  if (String(yyRaw).trim().length === 2) y = y <= 49 ? 2000 + y : 1900 + y;
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || y < 1990 || y > 2100) return '';
+  return normalizeDate(`${d}-${mo}-${y}`);
+}
+/**
+ * Unieke datums uit vrije opmerkingen (geschiedenis), o.a. 10-2-15 / 06-04-2010 / “3 mei 2010”.
+ */
+function extractVisitDatesIsoFromNlNotes(notesRaw) {
+  const plain = stripRoughRtfForNotes(notesRaw);
+  const today = todayLocalISO();
+  const maxIso = `${Number(today.slice(0, 4)) + 2}-12-31`;
+  const minIso = '1995-01-01';
+  const found = new Set();
+
+  const reDMY = /\b(\d{1,2})\s*[-/](\d{1,2})\s*[-/](\d{2}|\d{4})\b/g;
+  let m;
+  while ((m = reDMY.exec(plain)) !== null) {
+    const iso = isoFromLooseDdMmY(m[1], m[2], m[3]);
+    if (iso && iso >= minIso && iso <= maxIso) found.add(iso);
+  }
+
+  const reWd = /\b(\d{1,2})\s+([a-zéèïëô]+)\.?\s+(\d{4})\b/gi;
+  while ((m = reWd.exec(plain)) !== null) {
+    const day = parseInt(m[1], 10);
+    const monWord = String(m[2]).toLowerCase().replace(/\.$/, '');
+    const yy = parseInt(m[3], 10);
+    const mon = NL_NOTE_MONTH_FROM_WORD[monWord];
+    if (!mon || !yy || day < 1 || day > 31) continue;
+    const iso = normalizeDate(`${day}-${mon}-${yy}`);
+    if (iso && iso >= minIso && iso <= maxIso) found.add(iso);
+  }
+
+  return [...found].sort();
+}
 /** Salonware datumkolom: jjjj-mm-dd of met tijd */
 function normalizeSalonwareDate(s) {
   if (!s) return '';
@@ -1750,6 +1812,16 @@ function mergeSalonwareStatsFromCsvText(text) {
 const AFSPRAKEN_KLANTEN_FILENAME = 'Afspraken klanten.csv';
 const AFSPRAKEN_IMPORT_TAG = 'afspraken-klanten-csv';
 
+/** Verwijdert verkeerde “laatste afspraak” imports ver in de toekomst (Salonware = vaak onderhoud / geen echte agenda). */
+function purgeGhostFutureLaatsteImportedApts() {
+  const t = todayLocalISO();
+  const n0 = (DB.appointments || []).length;
+  DB.appointments = (DB.appointments || []).filter(
+    a => !(a.importTag === AFSPRAKEN_IMPORT_TAG && a.importSlot === 'laatste' && a.date > t)
+  );
+  return n0 - DB.appointments.length;
+}
+
 /**
  * Kiest een dienst-id op basis van vrije tekst (opmerkingen). Ruwe heuristiek — controleer na import.
  */
@@ -1793,9 +1865,10 @@ function appointmentItemFromTreatmentRefId(refId) {
 }
 
 /**
- * Leest Salonware-klantenexport (o.a. Afspraken klanten.csv): koppelt aan klant (klant_id / naam),
- * maakt voor elke rij tot 2 afspraken (eerste + laatste datum) met afgeleide behandeling uit opmerkingen.
- * Toekomstige datums → status gepland; verleden → afgerond.
+ * Leest Salonware-klantenexport (o.a. Afspraken klanten.csv): plant per klant afspraken op
+ * (1) eerste registratie, (2) laatste alleen als die ≤ vandaag (kolom laatste is vaak géén echte agenda),
+ * (3) losse datums uit opmerkingen (Euro d-m-j jj), bv. oude acne-bezoeken.
+ * Toekomstige datums (uit notities) → gepland; verleden → afgerond.
  */
 function importAppointmentsFromAfsprakenKlantenCsv(text, opts = {}) {
   const quiet = !!opts.quiet;
@@ -1805,7 +1878,7 @@ function importAppointmentsFromAfsprakenKlantenCsv(text, opts = {}) {
   const rows = parseCsv(raw, delimiter);
   if (rows.length < 2) {
     if (!quiet) showToast('Leeg bestand');
-    return { created: 0, skipped: 0, noClient: 0 };
+    return { created: 0, skipped: 0, noClient: 0, removedFutureLaatste: 0 };
   }
   const headers = rows[0].map(h => String(h || '').trim().toLowerCase().replace(/^"|"$/g, ''));
   const hEerste = firstMatchingColumnIndex(headers, ['eersteafspraak', 'eerste afspraak', 'eerste_afspraak']);
@@ -1813,14 +1886,17 @@ function importAppointmentsFromAfsprakenKlantenCsv(text, opts = {}) {
   const hNotes = firstMatchingColumnIndex(headers, ['opmerkingen', 'notities', 'notes', 'opmerking']);
   if (hLaatste === -1 && hEerste === -1) {
     if (!quiet) showToast('Geen eerste/laatste afspraak-kolommen gevonden');
-    return { created: 0, skipped: 0, noClient: 0 };
+    return { created: 0, skipped: 0, noClient: 0, removedFutureLaatste: 0 };
   }
+  const removedFutureLaatste = purgeGhostFutureLaatsteImportedApts();
   const today = todayLocalISO();
   let created = 0;
   let skipped = 0;
   let noClient = 0;
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
+    if ((r?.length || 0) + 20 < headers.length) continue;
+
     const notesRaw = hNotes > -1 ? String(r[hNotes] || '') : '';
     const refId = inferTreatmentRefIdFromNotes(notesRaw);
     const colKlant = firstMatchingColumnIndex(headers, ['klant_id', 'external_id']);
@@ -1833,18 +1909,36 @@ function importAppointmentsFromAfsprakenKlantenCsv(text, opts = {}) {
       continue;
     }
     const eerste = hEerste > -1 ? normalizeSalonwareDate(String((r[hEerste] || '').trim())) : '';
-    const laatste = hLaatste > -1 ? normalizeSalonwareDate(String((r[hLaatste] || '').trim())) : '';
+    const laatsteRaw = hLaatste > -1 ? normalizeSalonwareDate(String((r[hLaatste] || '').trim())) : '';
+    const laatstePast = laatsteRaw && laatsteRaw <= today ? laatsteRaw : '';
+    const noteDates = extractVisitDatesIsoFromNlNotes(notesRaw);
+
     const slots = [];
-    if (laatste) slots.push({ date: laatste, role: 'laatste' });
-    if (eerste && eerste !== laatste) slots.push({ date: eerste, role: 'eerste' });
+    const seenDates = new Set();
+    function pushSlot(date, role) {
+      if (!date || seenDates.has(date)) return;
+      seenDates.add(date);
+      slots.push({ date, role });
+    }
+    if (eerste) pushSlot(eerste, 'eerste');
+    if (laatstePast) pushSlot(laatstePast, 'laatste');
+    let nNote = 0;
+    for (const dIso of noteDates) {
+      if (nNote >= 24) break;
+      pushSlot(dIso, 'notitie');
+      nNote++;
+    }
+    slots.sort((a, b) => a.date.localeCompare(b.date));
+
     if (!slots.length) continue;
+
     const noteShort = sanitizeImportNotes(notesRaw, 400);
     let sub = 0;
     for (const slot of slots) {
       const isFuture = slot.date >= today;
       const status = isFuture ? 'gepland' : 'afgerond';
       const dup = DB.appointments.some(
-        a => a.clientId === c.id && a.date === slot.date && a.importTag === AFSPRAKEN_IMPORT_TAG && a.importSlot === slot.role
+        a => a.clientId === c.id && a.date === slot.date && a.importTag === AFSPRAKEN_IMPORT_TAG
       );
       if (dup) {
         skipped++;
@@ -1870,16 +1964,18 @@ function importAppointmentsFromAfsprakenKlantenCsv(text, opts = {}) {
       created++;
     }
   }
-  if (created) saveData(DB);
+  if (created || removedFutureLaatste) saveData(DB);
   if (!quiet) {
-    const parts = [`${created} afspraken toegevoegd`];
+    const parts = [];
+    if (removedFutureLaatste) parts.push(`${removedFutureLaatste} toekomst-“laatste” verwijderd`);
+    parts.push(`${created} afspraken toegevoegd`);
     if (skipped) parts.push(`${skipped} dubbel overgeslagen`);
     if (noClient) parts.push(`${noClient} rijen zonder match met klant — eerst klanten importeren`);
     showToast(parts.join(' · '));
   }
   renderAgenda();
   renderHome();
-  return { created, skipped, noClient };
+  return { created, skipped, noClient, removedFutureLaatste };
 }
 
 function saveDataWithImportQuotaFix() {
@@ -2057,9 +2153,11 @@ function tryImportBundledAfsprakenKlantenCsv() {
       return importAppointmentsFromAfsprakenKlantenCsv(text, { quiet: true });
     })
     .then(res => {
-      if (res && res.created > 0) {
-        showToast(`${res.created} afspraken geïmporteerd uit ${AFSPRAKEN_KLANTEN_FILENAME} (klant + behandeling)`);
-      }
+      if (!res) return null;
+      const bits = [];
+      if (res.removedFutureLaatste > 0) bits.push(`${res.removedFutureLaatste} foute toekomst-afspraken uit oude import verwijderd`);
+      if (res.created > 0) bits.push(`${res.created} afspraken uit ${AFSPRAKEN_KLANTEN_FILENAME} (klant + behandeling)`);
+      if (bits.length) showToast(bits.join(' · '));
       return res;
     })
     .catch(e => {
