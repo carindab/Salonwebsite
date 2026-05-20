@@ -6,7 +6,7 @@
 console.log('%c[Salon Beheer] salon-app.js v27 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
 const APP_VERSION = 'v27';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
-const SALON_SEED_VERSION = '2';
+const SALON_SEED_VERSION = '3';
 const SALON_SEED_KEY = 'salon-seed-version';
 /** v10: negeer v9 (o.a. CSV-upload bij file:// bleef in localStorage hangen). */
 const STORAGE_KEY = 'salon-data-v10';
@@ -1759,7 +1759,21 @@ function salonImportPatchFromRow(headers, row) {
   }
   if (iL > -1) {
     const v = normalizeSalonwareDate((row[iL] || '').trim());
-    if (v) salonImport.laatsteAfspraak = v;
+    if (v) {
+      const today = todayLocalISO();
+      if (v > today) salonImport.laatsteAfspraakGepland = v;
+      else salonImport.laatsteAfspraak = v;
+    }
+  }
+  const iAO = firstMatchingColumnIndex(headers, ['afspraakomzet', 'afspraak omzet']);
+  const iPO = firstMatchingColumnIndex(headers, ['productomzet', 'product omzet']);
+  if (iAO > -1) {
+    const m = parseSalonwareMoney(row[iAO]);
+    if (m !== null) salonImport.afspraakOmzet = m;
+  }
+  if (iPO > -1) {
+    const m = parseSalonwareMoney(row[iPO]);
+    if (m !== null) salonImport.productOmzet = m;
   }
   if (iO > -1) {
     const m = parseSalonwareMoney(row[iO]);
@@ -1809,6 +1823,124 @@ function mergeSalonwareStatsFromCsvText(text) {
   }
   if (merged) saveDataWithImportQuotaFix();
   return merged;
+}
+
+/**
+ * Werkt klantgegevens bij uit Salonware-CSV: volledige notities + salonImport (ook als klanten al geladen zijn).
+ * @returns {{ updated: number, added: number }}
+ */
+function mergeSalonwareClientsFromCsvText(text, opts = {}) {
+  const quiet = !!opts.quiet;
+  let raw = text;
+  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+  const delimiter = detectCsvDelimiter(raw);
+  const rows = parseCsv(raw, delimiter);
+  if (rows.length < 2) return { updated: 0, added: 0 };
+  const headers = rows[0].map(h => String(h || '').trim().toLowerCase().replace(/^"|"$/g, ''));
+  const aliases = {
+    firstName: ['firstname','voornaam','naam','name','klant'],
+    lastName:  ['lastname','achternaam'],
+    phone:     ['phone','telefoon','tel'],
+    mobile:    ['mobile','mobiel'],
+    email:     ['email','e-mail','mail'],
+    birthday:  ['birthday','verjaardag','geboortedatum','geboorte'],
+    address:   ['address','adres'],
+    city:      ['city','plaats','woonplaats'],
+    zip:       ['zip','postcode','postal'],
+    gender:    ['gender','geslacht','mv'],
+    initials:  ['initials','voorletters'],
+    notes:     ['notes','notitie','notities','opmerkingen'],
+    notesInternal: ['notesinternal','opmerkingen_intern','opmerkingen intern'],
+  };
+  function findCol(field) {
+    for (const a of aliases[field] || []) { const i = headers.indexOf(a); if (i !== -1) return i; }
+    return -1;
+  }
+  const cols = {};
+  Object.keys(aliases).forEach(f => { cols[f] = findCol(f); });
+  const colKlantId = firstMatchingColumnIndex(headers, ['klant_id', 'external_id']);
+  const colHuis = headers.indexOf('huisnummer');
+  const colVoor = headers.indexOf('voorvoegsel');
+  const noteMax = 1500;
+  const noteIntMax = 800;
+  let updated = 0;
+  let added = 0;
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const obj = {};
+    Object.keys(aliases).forEach(f => {
+      if (cols[f] > -1) obj[f] = (r[cols[f]] || '').trim();
+    });
+    if (obj.birthday) obj.birthday = normalizeDate(obj.birthday);
+    if (obj.notes) obj.notes = sanitizeImportNotes(obj.notes, noteMax);
+    if (obj.notesInternal) obj.notesInternal = sanitizeImportNotes(obj.notesInternal, noteIntMax);
+    if (obj.gender) {
+      const g = String(obj.gender).toUpperCase().charAt(0);
+      obj.gender = g === 'M' ? 'M' : (g === 'V' ? 'V' : obj.gender);
+    }
+
+    let fn = (obj.firstName || '').trim();
+    let ln = (obj.lastName || '').trim();
+    if (colVoor > -1) {
+      const pref = (r[colVoor] || '').trim();
+      if (pref) ln = [pref, ln].filter(Boolean).join(' ').trim();
+    }
+    if (!fn && !ln) continue;
+
+    let addr = (obj.address || '').trim();
+    if (colHuis > -1) {
+      const h = (r[colHuis] || '').trim();
+      if (h) addr = [addr, h].filter(Boolean).join(' ').trim();
+    }
+    obj.firstName = fn;
+    obj.lastName = ln;
+    obj.address = addr;
+
+    const siMerge = salonImportPatchFromRow(headers, r);
+    const extId = colKlantId > -1 ? String((r[colKlantId] || '').trim()) : '';
+    if (extId) obj.importSourceId = extId;
+
+    const fullName = [fn, ln].filter(Boolean).join(' ').toLowerCase();
+    let existing = extId ? DB.clients.find(c => c.importSourceId === extId) : null;
+    if (!existing && fullName) {
+      existing = DB.clients.find(c => clientFullName(c).toLowerCase() === fullName);
+    }
+    if (existing) {
+      Object.assign(existing, obj);
+      if (siMerge && Object.keys(siMerge).length) {
+        existing.salonImport = { ...(existing.salonImport || {}), ...siMerge };
+      }
+      updated++;
+    } else {
+      const nc = {
+        id: uid('c'),
+        gender: 'V',
+        initials: '',
+        firstName: '',
+        lastName: '',
+        address: '',
+        city: '',
+        phone: '',
+        mobile: '',
+        email: '',
+        birthday: '',
+        zip: '',
+        notes: '',
+        notesInternal: '',
+        mustPayFirst: 'standaard',
+        ...obj,
+      };
+      if (siMerge && Object.keys(siMerge).length) nc.salonImport = siMerge;
+      DB.clients.push(nc);
+      added++;
+    }
+  }
+  if (updated || added) saveDataWithImportQuotaFix();
+  if (!quiet && (updated || added)) {
+    showToast(`${added} klanten toegevoegd, ${updated} bijgewerkt (Salonware CSV)`);
+  }
+  return { updated, added };
 }
 
 /** Salonware-export in de map: plant agenda-afspraken (zie importAppointmentsFromAfsprakenKlantenCsv). */
@@ -2053,8 +2185,8 @@ function importClientsCsv(text) {
   const colHuis = headers.indexOf('huisnummer');
   const colVoor = headers.indexOf('voorvoegsel');
   const isSalonware = delimiter === ';' && colKlantId !== -1;
-  const noteMax = isSalonware ? 900 : 3000;
-  const noteIntMax = isSalonware ? 500 : 1500;
+  const noteMax = isSalonware ? 1500 : 3000;
+  const noteIntMax = isSalonware ? 800 : 1500;
 
   if (cols.firstName === -1) return showToast('CSV mist een naam-kolom (naam / voornaam)');
 
@@ -2240,6 +2372,20 @@ function tryImportBundledSalonwareCsv() {
     })
     .catch(e => {
       console.warn('[Salon] Auto-import Salonware CSV:', e && e.message);
+    });
+}
+
+/** Na seed of bij elke start: volledige notities + omzet/datums uit Salonware-CSV bijwerken. */
+function tryMergeBundledSalonwareCsv() {
+  if (location.protocol === 'file:') return Promise.resolve(null);
+  return fetchBundledSalonwareCsvText()
+    .then(text => {
+      if (!text || text.length < 80) throw new Error('Te kort');
+      return mergeSalonwareClientsFromCsvText(text, { quiet: true });
+    })
+    .catch(e => {
+      console.warn('[Salon] Salonware CSV merge:', e && e.message);
+      return null;
     });
 }
 
@@ -4657,6 +4803,34 @@ let currentDossierClientId = null;
 let currentKlantAfsprakenId = null;
 let currentIntakeClientId = null;
 
+function clientSalonwareEersteDatum(c) {
+  const si = c.salonImport || {};
+  return si.eersteAfspraak || '';
+}
+
+function clientSalonwareLaatsteDatum(c) {
+  const si = c.salonImport || {};
+  const today = todayLocalISO();
+  if (si.laatsteAfspraak && si.laatsteAfspraak <= today) return si.laatsteAfspraak;
+  const past = (DB.appointments || [])
+    .filter(a => a.clientId === c.id && a.date <= today && a.status === 'afgerond')
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (past.length) return past[past.length - 1].date;
+  return si.laatsteAfspraak || si.laatsteAfspraakGepland || '';
+}
+
+function clientSalonwareLaatsteLabel(c) {
+  const si = c.salonImport || {};
+  const today = todayLocalISO();
+  if (si.laatsteAfspraak && si.laatsteAfspraak <= today) return fmtDate(si.laatsteAfspraak);
+  const d = clientSalonwareLaatsteDatum(c);
+  if (!d) return '—';
+  if (si.laatsteAfspraakGepland && d === si.laatsteAfspraakGepland) {
+    return `${fmtDate(d)} (gepland in Salonware)`;
+  }
+  return fmtDate(d);
+}
+
 function ensureClientDossier(c) {
   c.dossier = c.dossier || {};
   c.forms = c.forms || [];
@@ -4688,13 +4862,14 @@ function renderKlantdossier() {
   const afgerond = (DB.appointments || [])
     .filter(a => a.clientId === c.id && a.status === 'afgerond')
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  const eersteAppStr = afgerond.length ? fmtDate(afgerond[0].date) : '—';
-  const laatsteAppStr = afgerond.length ? fmtDate(afgerond[afgerond.length - 1].date) : '—';
-  const totaalAppStr = fmtMoney(afgerond.reduce((s, a) => s + appointmentTotal(a), 0));
   const si = c.salonImport || {};
-  const eersteSwStr = si.eersteAfspraak ? fmtDate(si.eersteAfspraak) : '—';
-  const laatsteSwStr = si.laatsteAfspraak ? fmtDate(si.laatsteAfspraak) : '—';
+  const eersteStr = clientSalonwareEersteDatum(c) ? fmtDate(clientSalonwareEersteDatum(c)) : (afgerond.length ? fmtDate(afgerond[0].date) : '—');
+  const laatsteStr = clientSalonwareLaatsteLabel(c);
   const totaalSwStr = si.totaalOmzet != null ? fmtMoney(si.totaalOmzet) : '—';
+  const behOmzetStr = si.afspraakOmzet != null ? fmtMoney(si.afspraakOmzet) : '—';
+  const prodOmzetStr = si.productOmzet != null ? fmtMoney(si.productOmzet) : '—';
+  const totaalAppStr = fmtMoney(afgerond.reduce((s, a) => s + appointmentTotal(a), 0));
+  const agendaExactStr = String((DB.appointments || []).filter(a => a.clientId === c.id && a.importTag === 'salon-seed-v3').length);
 
   $('#dossierTitle').textContent = `Klantdossier – ${clientFullName(c)}`;
   const el = $('#dossierContent');
@@ -4704,27 +4879,28 @@ function renderKlantdossier() {
       <div class="dossier-main">
 
         <div class="card dossier-stats-card">
-          <div class="card-title">Bezoeken & omzet</div>
+          <div class="card-title">Bezoeken & omzet (Salonware)</div>
           <div class="card-body">
-            <p class="dossier-stats-hint">De agenda toont alleen afspraken die in deze app staan. De klanten-CSV uit Salonware bevat geen aparte afspraken-agenda; daar staan wel vaak samenvattingskolommen (onderstaand), die we bij import bewaren.</p>
+            <p class="dossier-stats-hint">Eerste en laatste behandeling komen uit je Salonware-export. In de agenda staan alleen bezoeken waar <strong>datum én bedrag</strong> in de notities staan — geen verzonnen afspraken meer.</p>
             <div class="dossier-stats-grid">
-              <div><span>Afgerekende bezoeken (deze app)</span><strong>${afgerond.length}</strong></div>
-              <div><span>Eerste behandeling (deze app)</span><strong>${escapeHtml(eersteAppStr)}</strong></div>
-              <div><span>Laatste behandeling (deze app)</span><strong>${escapeHtml(laatsteAppStr)}</strong></div>
-              <div><span>Totaal omzet (deze app)</span><strong>${totaalAppStr}</strong></div>
+              <div><span>Eerste behandeling</span><strong>${escapeHtml(eersteStr)}</strong></div>
+              <div><span>Laatste behandeling</span><strong>${escapeHtml(laatsteStr)}</strong></div>
+              <div><span>Totaal omzet (Salonware)</span><strong>${totaalSwStr}</strong></div>
+              <div><span>Behandelingen omzet</span><strong>${behOmzetStr}</strong></div>
+              <div><span>Producten omzet</span><strong>${prodOmzetStr}</strong></div>
+              <div><span>Agenda: bezoeken met bedrag uit notitie</span><strong>${agendaExactStr || '0'}</strong></div>
             </div>
             <div class="dossier-stats-sub" style="margin-top:14px;">
               <div class="dossier-stats-grid">
-                <div><span>Salonware-import — eerste afspraak</span><strong>${escapeHtml(eersteSwStr)}</strong></div>
-                <div><span>Salonware-import — laatste afspraak</span><strong>${escapeHtml(laatsteSwStr)}</strong></div>
-                <div><span>Salonware-import — totaal omzet</span><strong>${totaalSwStr}</strong></div>
+                <div><span>Afgerekend in deze app</span><strong>${afgerond.length}</strong></div>
+                <div><span>Omzet in deze app</span><strong>${totaalAppStr}</strong></div>
               </div>
             </div>
             <div class="dossier-stats-actions">
-              <button type="button" class="btn ghost small" id="dossierSalonwareStatsMerge">Salonware-CSV (omzet &amp; datums) laden…</button>
-              ${typeof location !== 'undefined' && location.protocol !== 'file:' ? `<button type="button" class="btn ghost small" id="dossierSalonwareBundledMerge">Zet bij uit ${escapeHtml(SALONWARE_BUNDLED_FILENAME)}</button>` : ''}
+              <button type="button" class="btn ghost small" id="dossierSalonwareStatsMerge">Salonware-CSV opnieuw laden…</button>
+              ${typeof location !== 'undefined' && location.protocol !== 'file:' ? `<button type="button" class="btn ghost small" id="dossierSalonwareBundledMerge">Notities bijwerken uit ${escapeHtml(SALONWARE_BUNDLED_FILENAME)}</button>` : ''}
             </div>
-            <p class="dossier-stats-filehelp">Die gegevens staan wél in je exportbestand, maar worden pas in deze app bewaard na <strong>één keer</strong> laden van dat CSV (hierboven of via <strong>Klanten → CSV importeren</strong>). Bij <code>file:///</code> kies je handmatig het bestand.</p>
+            <p class="dossier-stats-filehelp">Notities worden automatisch geladen vanaf GitHub. Bij problemen: <strong>Klanten → CSV importeren</strong> en kies <code>salonware-download (2).csv</code>.</p>
           </div>
         </div>
 
@@ -4883,9 +5059,9 @@ function renderKlantdossier() {
       if (!f) return;
       const reader = new FileReader();
       reader.onload = () => {
-        const n = mergeSalonwareStatsFromCsvText(String(reader.result || ''));
-        if (n > 0) {
-          showToast(`${n} klant(en): Salonware-cijfers bijgewerkt`);
+        const res = mergeSalonwareClientsFromCsvText(String(reader.result || ''), { quiet: true });
+        if (res.updated || res.added) {
+          showToast(`${res.updated} klant(en) bijgewerkt — notities & omzet`);
           renderKlantdossier();
         } else {
           showToast('Geen rijen gematcht — gebruik het volledige Salonware-export-CSV; check klant_id of exacte naam');
@@ -4900,9 +5076,9 @@ function renderKlantdossier() {
     showToast('Bezig met bijwerken…');
     fetchBundledSalonwareCsvText()
       .then((t) => {
-        const n = mergeSalonwareStatsFromCsvText(t);
-        if (n > 0) {
-          showToast(`${n} klant(en): Salonware-cijfers bijgewerkt`);
+        const res = mergeSalonwareClientsFromCsvText(t, { quiet: true });
+        if (res.updated || res.added) {
+          showToast(`${res.updated} klant(en) bijgewerkt — notities & omzet`);
           renderKlantdossier();
         } else {
           showToast('Geen match — kies je eigen export via de andere knop');
@@ -6034,13 +6210,18 @@ document.addEventListener('DOMContentLoaded', () => {
   showView('home');
 
   void bootstrapSalonFromHostedSeed().then(async seeded => {
-    if (!seeded) {
+    const merged = await tryMergeBundledSalonwareCsv();
+    if (!seeded && (DB.clients || []).length === 0) {
       await tryImportBundledSalonwareCsv();
-      await tryImportBundledAfsprakenKlantenCsv();
-      try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
-    } else {
-      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
     }
+    if (seeded) {
+      const bits = [`${DB.clients.length} klanten`, `${DB.appointments.length} afspraken (exacte bedragen)`];
+      if (merged && (merged.updated || merged.added)) bits.push(`${merged.updated} notities bijgewerkt`);
+      showToast(bits.join(' · '));
+    } else if (merged && merged.updated) {
+      showToast(`${merged.updated} klanten — notities bijgewerkt uit Salonware CSV`);
+    }
+    try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
     try {
       renderClients($('#searchClient')?.value || '');
       renderAgenda();

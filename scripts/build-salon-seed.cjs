@@ -10,7 +10,7 @@ const path = require("path");
 const KLANTEN_CSV = path.join(__dirname, "..", "salonware-download (2).csv");
 const AFSPRAKEN_CSV = path.join(__dirname, "..", "Afspraken klanten.csv");
 const OUT = path.join(__dirname, "..", "salon-seed.json");
-const SEED_VERSION = 2;
+const SEED_VERSION = 3;
 const TODAY = new Date().toISOString().slice(0, 10);
 const T_REF = "t130";
 const P_REF = "p020";
@@ -447,16 +447,10 @@ function inferYearFromNotes(lines) {
   return years[Math.floor(years.length / 2)];
 }
 
-function selectDiaryVisits(parsed, nTreat, nProd) {
-  const treats = parsed
-    .filter((v) => v.kind === "treatment" && v.source === "diary" && v.price > 0)
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .slice(0, Math.max(0, nTreat));
-  const prods = parsed
-    .filter((v) => v.kind === "product" && v.price > 0)
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .slice(0, Math.max(0, nProd));
-  return { treats, prods };
+function selectExactVisits(parsed) {
+  return parsed
+    .filter((v) => v.price > 0 && v.date && v.date <= TODAY)
+    .sort((a, b) => a.date.localeCompare(b.date) || b.score - a.score);
 }
 
 /** Haal concrete bezoeken uit notities: dagboekregels + Salonware-log (tab + datum). */
@@ -488,27 +482,12 @@ function buildAppointmentsForClient(row, H, clientId, extId) {
   const notes = col("opmerkingen") > -1 ? r(row, col("opmerkingen")) : "";
   const notesInternal = col("opmerkingen_intern") > -1 ? r(row, col("opmerkingen_intern")) : "";
   const e1 = col("eersteafspraak") > -1 ? normalizeDate(r(row, col("eersteafspraak"))) : "";
-  let e2 = col("laatsteafspraak") > -1 ? normalizeDate(r(row, col("laatsteafspraak"))) : "";
-  if (e2 > TODAY) e2 = TODAY;
-
-  const bA = col("afspraakomzet") > -1 ? parseMoney(r(row, col("afspraakomzet"))) : 0;
-  const bP = col("productomzet") > -1 ? parseMoney(r(row, col("productomzet"))) : 0;
-  const rawAantBeh = col("aantalbehandelingen") > -1 ? parseInt(r(row, col("aantalbehandelingen")) || "0", 10) : 0;
-  const rawAantProd = col("aantalproducten") > -1 ? parseInt(r(row, col("aantalproducten")) || "0", 10) : 0;
-
-  const nB = bA > 0 ? (rawAantBeh > 0 ? rawAantBeh : 1) : 0;
-  const nP = bP > 0 ? (rawAantProd > 0 ? rawAantProd : 1) : 0;
+  const e2raw = col("laatsteafspraak") > -1 ? normalizeDate(r(row, col("laatsteafspraak"))) : "";
 
   const noteLines = linesFromNotes(notes, notesInternal);
-  const fullPlain = [notes, notesInternal].filter(Boolean).join("\n\n");
-  const allMoney = extractMoneyFromString(fullPlain);
-  const treatHints = noteLines.filter(isTreatishLine).flatMap((l) => extractMoneyFromString(l));
-  const prodHints = noteLines.filter(isProduishLine).flatMap((l) => extractMoneyFromString(l));
-
-  const yearHint = inferYearFromNotes(noteLines) || parseInt(String(e2 || e1 || TODAY).slice(0, 4), 10) || undefined;
+  const yearHint = inferYearFromNotes(noteLines) || parseInt(String(e1 || TODAY).slice(0, 4), 10) || undefined;
   const parsedVisits = parseVisitsFromNotes(notes, notesInternal, yearHint);
-  const selected = selectDiaryVisits(parsedVisits, nB, nP);
-  const usedDates = new Set(selected.treats.concat(selected.prods).map((v) => v.date));
+  const exact = selectExactVisits(parsedVisits);
   const appts = [];
   const dayOrder = new Map();
   let seq = 0;
@@ -525,72 +504,14 @@ function buildAppointmentsForClient(row, H, clientId, extId) {
       time: timeForOrder(o - 1),
       status: ymd >= TODAY ? "gepland" : "afgerond",
       paid: ymd < TODAY,
-      notes: "Salonware import",
+      notes: "Salonware — bedrag uit notitie",
       items: [item],
-      importTag: "salon-seed-v2",
+      importTag: "salon-seed-v3",
     });
   }
 
-  for (const v of selected.treats) {
-    pushAppt(v.date, makeItem("treatment", v.label, v.price));
-  }
-  for (const v of selected.prods) {
-    pushAppt(v.date, makeItem("product", v.label, v.price));
-  }
-
-  const parsedBehSum = selected.treats.reduce((s, v) => s + (v.price || 0), 0);
-  const parsedProdSum = selected.prods.reduce((s, v) => s + (v.price || 0), 0);
-  const needB = Math.max(0, nB - selected.treats.length);
-  const needP = Math.max(0, nP - selected.prods.length);
-  const budgetB = Math.max(0, Math.round((bA - parsedBehSum) * 100));
-  const budgetP = Math.max(0, Math.round((bP - parsedProdSum) * 100));
-
-  if (needB > 0 && budgetB > 0) {
-    const labels = pickTreatmentLabels(noteLines, needB);
-    const weights = takeWeightsOrPad(treatHints.length ? treatHints : allMoney, needB);
-    const prices = splitToTargetCentsByWeights(budgetB, weights);
-    let dates = spreadDateStrings(e1, e2, needB);
-    dates = dates.map((d) => {
-      if (!usedDates.has(d)) {
-        usedDates.add(d);
-        return d;
-      }
-      for (let off = 1; off < 400; off++) {
-        const alt = addDaysYmd(d, off);
-        if (alt <= TODAY && !usedDates.has(alt)) {
-          usedDates.add(alt);
-          return alt;
-        }
-      }
-      usedDates.add(d);
-      return d;
-    });
-    for (let k = 0; k < needB; k++) {
-      pushAppt(dates[k] || e2 || e1, makeItem("treatment", labels[k], prices[k]));
-    }
-  }
-  if (needP > 0 && budgetP > 0) {
-    const labels = pickProductLabels(noteLines, needP);
-    const weights = takeWeightsOrPad(prodHints.length ? prodHints : allMoney, needP);
-    const prices = splitToTargetCentsByWeights(budgetP, weights);
-    let dates = spreadDateStrings(e1, e2, needP);
-    dates = dates.map((d) => {
-      if (!usedDates.has(d)) {
-        usedDates.add(d);
-        return d;
-      }
-      for (let off = 1; off < 400; off++) {
-        const alt = addDaysYmd(d, off);
-        if (alt <= TODAY && !usedDates.has(alt)) {
-          usedDates.add(alt);
-          return alt;
-        }
-      }
-      return d;
-    });
-    for (let k = 0; k < needP; k++) {
-      pushAppt(dates[k] || e2 || e1, makeItem("product", labels[k], prices[k]));
-    }
+  for (const v of exact) {
+    pushAppt(v.date, makeItem(v.kind, v.label, v.price));
   }
 
   appts.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
@@ -642,7 +563,18 @@ for (let i = 1; i < kRows.length; i++) {
   }
   if (col("laatsteafspraak") > -1) {
     const v = normalizeDate(r(row, col("laatsteafspraak")));
-    if (v) salonImport.laatsteAfspraak = v;
+    if (v) {
+      if (v > TODAY) salonImport.laatsteAfspraakGepland = v;
+      else salonImport.laatsteAfspraak = v;
+    }
+  }
+  if (col("afspraakomzet") > -1) {
+    const m = parseMoney(r(row, col("afspraakomzet")));
+    if (m) salonImport.afspraakOmzet = m;
+  }
+  if (col("productomzet") > -1) {
+    const m = parseMoney(r(row, col("productomzet")));
+    if (m) salonImport.productOmzet = m;
   }
   if (col("totaalomzet") > -1) {
     const m = parseMoney(r(row, col("totaalomzet")));
@@ -662,8 +594,8 @@ for (let i = 1; i < kRows.length; i++) {
     mobile: col("mobiel") > -1 ? r(row, col("mobiel")) : "",
     email: col("email") > -1 ? r(row, col("email")) : "",
     birthday: col("geboortedatum") > -1 ? normalizeDate(r(row, col("geboortedatum"))) : "",
-    notes: sanitizeNotes(col("opmerkingen") > -1 ? row[col("opmerkingen")] : "", 400),
-    notesInternal: sanitizeNotes(col("opmerkingen_intern") > -1 ? row[col("opmerkingen_intern")] : "", 250),
+    notes: sanitizeNotes(col("opmerkingen") > -1 ? row[col("opmerkingen")] : "", 1500),
+    notesInternal: sanitizeNotes(col("opmerkingen_intern") > -1 ? row[col("opmerkingen_intern")] : "", 800),
     mustPayFirst: "standaard",
     importSourceId: extId,
   };
