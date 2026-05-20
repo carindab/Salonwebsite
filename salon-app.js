@@ -3,8 +3,11 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v26 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v26';
+console.log('%c[Salon Beheer] salon-app.js v27 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v27';
+/** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
+const SALON_SEED_VERSION = '1';
+const SALON_SEED_KEY = 'salon-seed-version';
 /** v10: negeer v9 (o.a. CSV-upload bij file:// bleef in localStorage hangen). */
 const STORAGE_KEY = 'salon-data-v10';
 
@@ -2237,6 +2240,38 @@ function tryImportBundledSalonwareCsv() {
     })
     .catch(e => {
       console.warn('[Salon] Auto-import Salonware CSV:', e && e.message);
+    });
+}
+
+/**
+ * Laadt vooraf gebouwde salon-seed.json (klanten + afspraken) — werkt direct op GitHub Pages.
+ * Geen handmatige stappen nodig voor bezoekers.
+ */
+function bootstrapSalonFromHostedSeed() {
+  if (location.protocol === 'file:') return Promise.resolve(false);
+  const stored = localStorage.getItem(SALON_SEED_KEY);
+  if (stored === SALON_SEED_VERSION && (DB.clients || []).length > 0) {
+    return Promise.resolve(false);
+  }
+  return fetch(`salon-seed.json?v=${encodeURIComponent(SALON_SEED_VERSION)}`, { cache: 'no-store' })
+    .then(res => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(seed => {
+      if (!seed || !Array.isArray(seed.clients) || !seed.clients.length) {
+        throw new Error('Leeg seed-bestand');
+      }
+      DB.clients = seed.clients;
+      DB.appointments = Array.isArray(seed.appointments) ? seed.appointments : [];
+      saveDataWithImportQuotaFix();
+      localStorage.setItem(SALON_SEED_KEY, SALON_SEED_VERSION);
+      console.log('[Salon] seed geladen:', seed.clients.length, 'klanten,', DB.appointments.length, 'afspraken');
+      return true;
+    })
+    .catch(e => {
+      console.warn('[Salon] Seed bootstrap mislukt:', e && e.message);
+      return false;
     });
 }
 
@@ -5998,14 +6033,19 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#brandName').textContent = DB.settings.salonName || 'Salon';
   showView('home');
 
-  void tryImportBundledSalonwareCsv().then(() => {
+  void bootstrapSalonFromHostedSeed().then(async seeded => {
+    if (!seeded) {
+      await tryImportBundledSalonwareCsv();
+      await tryImportBundledAfsprakenKlantenCsv();
+      try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
+    } else {
+      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
+    }
     try {
       renderClients($('#searchClient')?.value || '');
-      updateSalonwareBundledChrome();
+      renderAgenda();
+      renderHome();
     } catch (e) { /* */ }
-    return tryImportBundledAfsprakenKlantenCsv();
-  }).then(() => {
-    try { renderAgenda(); renderHome(); } catch (e) { /* */ }
   });
 
   // ---- AUTO-AFBOEKEN OM 21:00 NL TIJD ----
