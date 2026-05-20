@@ -6,7 +6,7 @@
 console.log('%c[Salon Beheer] salon-app.js v27 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
 const APP_VERSION = 'v27';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
-const SALON_SEED_VERSION = '1';
+const SALON_SEED_VERSION = '2';
 const SALON_SEED_KEY = 'salon-seed-version';
 /** v10: negeer v9 (o.a. CSV-upload bij file:// bleef in localStorage hangen). */
 const STORAGE_KEY = 'salon-data-v10';
