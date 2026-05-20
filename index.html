@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>Salon Beheer</title>
+  <link rel="stylesheet" href="styles.css?v=17" />
+</head>
+<body>
+  <div class="app" id="appRoot">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <button class="hamburger" id="hamburger" aria-label="Menu">
+          <span></span><span></span><span></span>
+        </button>
+        <span class="brand" id="brandName">Salon</span>
+      </div>
+      <nav class="nav">
+        <a href="#" class="nav-item active" data-view="home">
+          <span class="nav-icon">⌂</span><span class="nav-label">Home</span>
+        </a>
+        <a href="#" class="nav-item" data-view="agenda">
+          <span class="nav-icon">📅</span><span class="nav-label">Agenda</span>
+        </a>
+        <a href="#" class="nav-item" data-view="klanten">
+          <span class="nav-icon">👥</span><span class="nav-label">Klanten</span>
+        </a>
+        <a href="#" class="nav-item nav-parent" id="beheerParent">
+          <span class="nav-icon">⚙</span><span class="nav-label">Beheer</span><span class="nav-arrow">▸</span>
+        </a>
+        <div class="nav-sub" id="beheerSub">
+          <a href="#" class="nav-item nav-child" data-view="beheer" data-tab="diensten">
+            <span class="nav-icon">✂</span><span class="nav-label">Diensten</span>
+          </a>
+          <a href="#" class="nav-item nav-child" data-view="beheer" data-tab="producten">
+            <span class="nav-icon">🛍</span><span class="nav-label">Producten</span>
+          </a>
+          <a href="#" class="nav-item nav-child" data-view="beheer" data-tab="openingstijden">
+            <span class="nav-icon">🕐</span><span class="nav-label">Openingstijden</span>
+          </a>
+        </div>
+        <a href="#" class="nav-item nav-parent" id="rapportageParent">
+          <span class="nav-icon">📊</span><span class="nav-label">Rapportages</span><span class="nav-arrow">▸</span>
+        </a>
+        <div class="nav-sub" id="rapportageSub">
+          <a href="#" class="nav-item nav-child" data-view="rapportage" data-tab="dagrapport">
+            <span class="nav-icon">📋</span><span class="nav-label">Dagrapport</span>
+          </a>
+          <a href="#" class="nav-item nav-child" data-view="rapportage" data-tab="bestedingen">
+            <span class="nav-icon">💶</span><span class="nav-label">Bestedingen</span>
+          </a>
+          <a href="#" class="nav-item nav-child" data-view="rapportage" data-tab="omzetcategorie">
+            <span class="nav-icon">🏷</span><span class="nav-label">Omzet per categorie</span>
+          </a>
+          <a href="#" class="nav-item nav-child" data-view="rapportage" data-tab="omzetdienst">
+            <span class="nav-icon">📦</span><span class="nav-label">Omzet per dienst/product</span>
+          </a>
+        </div>
+        <a href="#" class="nav-item" data-view="instellingen">
+          <span class="nav-icon">🔧</span><span class="nav-label">Instellingen</span>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="icon-btn" title="Hulp">💬</button>
+        <button class="icon-btn" title="Voorkeuren" id="quickSettings">⚙</button>
+        <button class="icon-btn" title="Reset demo" id="resetDemo">↺</button>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main" id="main">
+
+      <!-- HOME -->
+      <section class="view" data-view="home">
+        <div class="grid-2">
+          <div class="col">
+            <div class="card">
+              <div class="card-title">Reserveringen vandaag</div>
+              <div class="card-body">
+                <table class="data-table">
+                  <thead>
+                    <tr><th>Datum</th><th>Klant</th><th>Onderdelen</th><th></th></tr>
+                  </thead>
+                  <tbody id="todayReservations">
+                    <tr><td colspan="4" class="empty">Nog geen reserveringen vandaag.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Openstaande bedragen</div>
+              <div class="card-body">
+                <table class="data-table">
+                  <thead>
+                    <tr><th>Datum</th><th>Klant</th><th>Openstaand</th><th></th></tr>
+                  </thead>
+                  <tbody id="openAmounts">
+                    <tr><td colspan="4" class="empty">Geen openstaande bedragen.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="col side">
+            <div class="card">
+              <div class="card-title">Verjaardagen</div>
+              <div class="card-body" id="birthdays">
+                <p class="empty">Geen verjaardagen deze week.</p>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-body small">
+                <strong>Bezetting vandaag:</strong> <span id="occupancyToday">0,00 %</span>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Volgende afspraken vandaag</div>
+              <div class="card-body" id="appointmentsToday">
+                <p class="empty">Er zijn geen afspraken (meer) vandaag.</p>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Volgende afspraken morgen</div>
+              <div class="card-body" id="appointmentsTomorrow">
+                <p class="empty">Er zijn geen afspraken gepland morgen.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- AGENDA -->
+      <section class="view hidden" data-view="agenda">
+        <div class="toolbar">
+          <button class="btn ghost" id="todayBtn">Vandaag</button>
+          <button class="btn ghost" id="prevWeek">‹</button>
+          <input type="date" id="agendaDate" />
+          <button class="btn ghost" id="nextWeek">›</button>
+          <span id="agendaWeekLabel" style="font-size:13px; font-weight:600;"></span>
+          <span class="spacer"></span>
+          <button class="btn primary" id="newAppointment">+ Nieuwe afspraak</button>
+        </div>
+
+        <div class="card agenda-week-card">
+          <div class="card-body no-pad">
+            <div class="agenda-scroll">
+              <div class="agenda-week-grid" role="region" aria-label="Weekagenda">
+                <div class="agenda-head-row" id="agendaThead" role="row"></div>
+                <div class="agenda-body" id="agendaTbody"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- KLANTEN: volle breedte (zoals Salonware); detail in schuifpaneel -->
+      <section class="view hidden view-klanten-workspace" data-view="klanten">
+        <div class="toolbar klanten-toolbar">
+          <input type="search" id="searchClient" placeholder="Zoek klant op naam..." />
+          <label class="klanten-sort-wrap" title="Welk veld bepaalt de volgorde (standaard: achternaam, A–Z)">Sorteer
+            <select id="klantenSort">
+              <option value="lastName">Achternaam A–Z</option>
+              <option value="firstName">Voornaam A–Z</option>
+              <option value="importId">Klantnr (export)</option>
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <label class="btn ghost file-btn" title="Komma of Salonware (puntkomma)">
+            CSV importeren
+            <input type="file" id="csvImport" accept=".csv,text/csv" hidden />
+          </label>
+          <button class="btn ghost" id="csvExport">CSV exporteren</button>
+          <button class="btn ghost" id="csvTemplate">CSV-voorbeeld</button>
+          <label class="btn ghost file-btn" title="Salonware-export met eerste/laatste afspraak (o.a. Afspraken klanten.csv): agenda vullen, behandeling afgeleid uit opmerkingen">
+            Afspraken inplannen
+            <input type="file" id="afsprakenKlantenImport" accept=".csv,text/csv" hidden />
+          </label>
+          <button type="button" class="btn ghost small" id="afsprakenKlantenBundled" title="Laadt Afspraken klanten.csv naast index.html (werkt niet met file://)">Afspraken uit map</button>
+          <button class="btn primary" id="newClient">+ Nieuwe klant</button>
+        </div>
+
+        <div class="klanten-main-full">
+          <div class="card klanten-list-card">
+            <div class="card-title klanten-list-title">Klanten</div>
+            <div class="card-body no-pad klanten-card-body">
+              <div class="klanten-table-scroll">
+                <table class="data-table klanten-table">
+                  <thead>
+                    <tr>
+                      <th class="col-mv">MV</th>
+                      <th class="col-naam">Naam</th>
+                      <th class="col-adres">Adres</th>
+                      <th class="col-plaats">Plaats</th>
+                      <th class="col-tel">Telefoon</th>
+                      <th class="col-mail">E-mail</th>
+                      <th class="col-act" aria-label="Detail"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="clientsBody"></tbody>
+                </table>
+              </div>
+              <div id="clientsPagination" class="clients-pagination" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <aside id="clientDetailDrawer" class="client-detail-drawer" aria-hidden="true">
+          <button type="button" class="client-detail-drawer-backdrop" id="clientDetailDrawerBackdrop" aria-label="Sluit klantpaneel"></button>
+          <div class="client-detail-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="clientDetailTitle">
+            <header class="client-detail-drawer-header">
+              <button type="button" class="client-detail-drawer-close" id="clientDetailDrawerClose" aria-label="Sluiten">×</button>
+              <h2 class="client-detail-drawer-heading" id="clientDetailTitle">Klantdetail</h2>
+            </header>
+            <div class="client-detail-drawer-body" id="clientDetail">
+              <p class="empty">Selecteer een klant in de lijst.</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <!-- BEHEER -->
+      <section class="view hidden" data-view="beheer">
+        <!-- Tabs -->
+        <div class="beheer-tabs">
+          <button class="beheer-tab active" data-tab="diensten">✂ Diensten</button>
+          <button class="beheer-tab" data-tab="producten">🛍 Producten</button>
+          <button class="beheer-tab" data-tab="openingstijden">🕐 Openingstijden</button>
+        </div>
+
+        <!-- Tab: Diensten -->
+        <div class="beheer-panel" id="panel-diensten">
+          <div class="card">
+            <div class="card-title">
+              Diensten beheren
+              <span style="display:flex; gap:8px; align-items:center;">
+                <input type="search" id="searchTreatment" placeholder="Zoeken..." style="padding:4px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;" />
+                <button class="btn primary small" id="addCategory">+ Categorie toevoegen</button>
+              </span>
+            </div>
+            <div class="card-body no-pad" id="treatmentsList"></div>
+          </div>
+        </div>
+
+        <!-- Tab: Producten -->
+        <div class="beheer-panel hidden" id="panel-producten">
+          <div class="card">
+            <div class="card-title">
+              Producten beheren
+              <span style="display:flex; gap:8px; align-items:center;">
+                <button class="btn ghost small" id="addProductCategory">+ Categorie</button>
+                <button class="btn primary small" id="newProduct">+ Product</button>
+              </span>
+            </div>
+            <div class="card-body no-pad">
+              <table class="data-table">
+                <thead>
+                  <tr><th>Naam</th><th>Voorraad</th><th>Prijs</th><th></th></tr>
+                </thead>
+                <tbody id="productsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Openingstijden -->
+        <div class="beheer-panel hidden" id="panel-openingstijden">
+          <div class="card">
+            <div class="card-title">Openingstijden &amp; Rooster</div>
+            <div class="card-body">
+              <form id="openingsForm" class="form">
+                <label>Openingstijd
+                  <input type="time" name="openTime" />
+                </label>
+                <label>Sluitingstijd
+                  <input type="time" name="closeTime" />
+                </label>
+                <label style="grid-column:1/-1; flex-direction:row; align-items:center; gap:10px;">
+                  <input type="checkbox" name="weekSchemaEnabled" />
+                  Week-aan / week-af schema (elke andere week werken)
+                </label>
+                <label>Werkweek
+                  <select name="weekSchemaWorkOdd">
+                    <option value="odd">Oneven weken (1, 3, 5…) = werkweek</option>
+                    <option value="even">Even weken (2, 4, 6…) = werkweek</option>
+                  </select>
+                </label>
+                <div style="grid-column:1/-1;">
+                  <div id="weekSchemaPreview" class="week-preview"></div>
+                </div>
+                <button type="submit" class="btn primary">Opslaan</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RAPPORTAGE -->
+      <section class="view hidden" data-view="rapportage">
+        <div class="beheer-tabs">
+          <button class="beheer-tab active" data-tab="dagrapport">📋 Dagrapport</button>
+          <button class="beheer-tab" data-tab="bestedingen">💶 Bestedingen</button>
+          <button class="beheer-tab" data-tab="omzetcategorie">🏷 Omzet per categorie</button>
+          <button class="beheer-tab" data-tab="omzetdienst">📦 Omzet per dienst/product</button>
+        </div>
+
+        <!-- Dagrapport -->
+        <div class="beheer-panel" id="rpanel-dagrapport">
+          <div class="toolbar">
+            <button class="btn ghost" id="dagPrev">‹</button>
+            <button class="btn ghost" id="dagToday">Vandaag</button>
+            <input type="date" id="dagDate" />
+            <button class="btn ghost" id="dagNext">›</button>
+            <span class="spacer"></span>
+            <button class="btn ghost" id="printDag">Afdrukken</button>
+          </div>
+          <div id="dagContent"></div>
+        </div>
+
+        <!-- Bestedingen -->
+        <div class="beheer-panel hidden" id="rpanel-bestedingen">
+          <div id="bestContent"></div>
+        </div>
+
+        <!-- Omzet per categorie -->
+        <div class="beheer-panel hidden" id="rpanel-omzetcategorie">
+          <div id="catContent"></div>
+        </div>
+
+        <!-- Omzet per dienst/product -->
+        <div class="beheer-panel hidden" id="rpanel-omzetdienst">
+          <div id="dienstContent"></div>
+        </div>
+      </section>
+
+      <!-- AFSPRAAK DETAIL (geen modal, volwaardige pagina) -->
+      <section class="view hidden" data-view="afspraak-detail">
+        <div class="page-header">
+          <button class="btn ghost small" id="apptBack">‹ Terug naar agenda</button>
+          <h2 id="apptDetailTitle">Afspraak beheren</h2>
+        </div>
+        <div class="appt-page" id="apptDetailContent"></div>
+      </section>
+
+      <!-- AFREKENEN (geen modal, volwaardige pagina) -->
+      <section class="view hidden" data-view="afrekenen">
+        <div class="page-header">
+          <button class="btn ghost small" id="afrBack">‹ Terug</button>
+          <h2 id="afrTitle">Afrekenen</h2>
+        </div>
+        <div class="afrekenen-page" id="afrekenenContent"></div>
+      </section>
+
+      <!-- KLANTDOSSIER (volwaardige pagina) -->
+      <section class="view hidden" data-view="klantdossier">
+        <div class="page-header">
+          <button class="btn ghost small" id="dossierBack">‹ Terug</button>
+          <h2 id="dossierTitle">Klantdossier</h2>
+        </div>
+        <div class="dossier-page" id="dossierContent"></div>
+      </section>
+
+      <!-- AFSPRAKEN & PRODUCTEN (volwaardige pagina) -->
+      <section class="view hidden" data-view="klant-afspraken">
+        <div class="page-header">
+          <button class="btn ghost small" id="kaBack">‹ Terug</button>
+          <h2 id="kaTitle">Afspraken en producten</h2>
+        </div>
+        <div class="ka-page" id="kaContent"></div>
+      </section>
+
+      <!-- INTAKE-FORMULIER (volwaardige pagina) -->
+      <section class="view hidden" data-view="intake-form">
+        <div class="page-header">
+          <button class="btn ghost small" id="intakeBack">‹ Terug</button>
+          <h2 id="intakeTitle">Huidenquête</h2>
+        </div>
+        <div class="intake-page" id="intakeContent"></div>
+      </section>
+
+      <!-- INSTELLINGEN -->
+      <section class="view hidden" data-view="instellingen">
+        <div class="beheer-tabs">
+          <button class="beheer-tab active" data-stab="bedrijf">🏢 Bedrijfsgegevens</button>
+          <button class="beheer-tab" data-stab="berichten">📧 Berichten / E-mailteksten</button>
+          <button class="beheer-tab" data-stab="formulier">📝 Formulieren</button>
+          <button class="beheer-tab" data-stab="algemeen">⚙ Algemeen</button>
+          <button class="beheer-tab" data-stab="data">💾 Data &amp; backup</button>
+        </div>
+
+        <div class="beheer-panel" id="spanel-bedrijf"></div>
+        <div class="beheer-panel hidden" id="spanel-berichten"></div>
+        <div class="beheer-panel hidden" id="spanel-formulier"></div>
+        <div class="beheer-panel hidden" id="spanel-algemeen"></div>
+        <div class="beheer-panel hidden" id="spanel-data"></div>
+      </section>
+
+      <!-- FACTUUR (volwaardige pagina) -->
+      <section class="view hidden" data-view="factuur">
+        <div class="page-header">
+          <button class="btn ghost small" id="facBack">‹ Terug</button>
+          <h2 id="facTitle">Factuur</h2>
+        </div>
+        <div class="factuur-page" id="factuurContent"></div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal-backdrop hidden" id="modalBackdrop">
+    <div class="modal" id="modalBox">
+      <div class="modal-header">
+        <h3 id="modalTitle">Titel</h3>
+        <button class="icon-btn" id="modalClose" aria-label="Sluiten">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="burcu-akcay-appointments.js?v=2"></script>
+  <script src="salon-app.js?v=40"></script>
+</body>
+</html>
