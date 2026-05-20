@@ -6,7 +6,7 @@
 console.log('%c[Salon Beheer] salon-app.js v27 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
 const APP_VERSION = 'v27';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
-const SALON_SEED_VERSION = '3';
+const SALON_SEED_VERSION = '4';
 const SALON_SEED_KEY = 'salon-seed-version';
 /** v10: negeer v9 (o.a. CSV-upload bij file:// bleef in localStorage hangen). */
 const STORAGE_KEY = 'salon-data-v10';
@@ -1033,6 +1033,25 @@ function renderAgenda() {
     return `<div class="agenda-day-col${!work ? ' free-day-col' : ''}" data-date="${d}" style="min-height:${maxH}px"><div class="agenda-day-slots">${slotEls}</div><div class="agenda-day-apps">${blocks}</div></div>`;
   }).join('');
   tbody.innerHTML = '<div class="agenda-cols" role="presentation">' + cols + '</div>';
+
+  const weekTotal = weekDates.reduce((n, d) => n + (appsByDay[d]?.length || 0), 0);
+  const allTotal = (DB.appointments || []).filter(a => a.status !== 'geannuleerd' && a.status !== 'verwijderd').length;
+  let hint = document.getElementById('agendaEmptyHint');
+  if (!hint) {
+    hint = document.createElement('div');
+    hint.id = 'agendaEmptyHint';
+    hint.className = 'agenda-empty-hint';
+    tbody.parentElement?.insertBefore(hint, tbody);
+  }
+  if (weekTotal === 0 && allTotal > 0) {
+    hint.innerHTML = `<p>Geen afspraken in deze week. Er staan <strong>${allTotal}</strong> afspraken in totaal (meestal historie). Gebruik <strong>◀ Vorige week</strong> of klik op een leeg tijdvak om een <strong>nieuwe afspraak</strong> te maken.</p>`;
+    hint.style.display = 'block';
+  } else if (allTotal === 0) {
+    hint.innerHTML = `<p>Agenda is leeg. Wacht tot klanten geladen zijn, of maak een nieuwe afspraak via <strong>+ Afspraak</strong> of klik in het rooster. Data wordt opgeslagen in deze browser.</p>`;
+    hint.style.display = 'block';
+  } else {
+    hint.style.display = 'none';
+  }
 }
 
 function openAppointmentModal(existing) {
@@ -2396,7 +2415,9 @@ function tryMergeBundledSalonwareCsv() {
 function bootstrapSalonFromHostedSeed() {
   if (location.protocol === 'file:') return Promise.resolve(false);
   const stored = localStorage.getItem(SALON_SEED_KEY);
-  if (stored === SALON_SEED_VERSION && (DB.clients || []).length > 0) {
+  const hasClients = (DB.clients || []).length > 0;
+  const hasAppts = (DB.appointments || []).length > 0;
+  if (stored === SALON_SEED_VERSION && hasClients && hasAppts) {
     return Promise.resolve(false);
   }
   return fetch(`salon-seed.json?v=${encodeURIComponent(SALON_SEED_VERSION)}`, { cache: 'no-store' })
@@ -4517,8 +4538,8 @@ function renderDataPanel() {
     <div class="card">
       <div class="card-title">Data &amp; backup</div>
       <div class="card-body">
-        <p>Alle data wordt lokaal in je browser opgeslagen.</p>
-        <p style="color:var(--muted); font-size:13px; max-width:42rem; margin:0 0 10px 0;">De ingebouwde <strong>testklant</strong> (historie in <code>burcu-akcay-appointments.js</code>) staat standaard <strong>uit</strong> — zet alleen aan als je die bewust wilt tonen.</p>
+        <p>Alle data wordt <strong>lokaal in je browser</strong> opgeslagen (localStorage). Dat werkt op GitHub Pages — je kunt gewoon nieuwe afspraken boeken; die blijven bewaard op deze computer/tablet in deze browser.</p>
+        <p style="color:var(--muted); font-size:13px; max-width:42rem; margin:0 0 10px 0;">GitHub host alleen de website, geen database. Voor backup: download regelmatig een JSON-backup. Op een andere computer: backup importeren. Voor sync tussen meerdere apparaten is later een cloud-database nodig (bijv. Supabase).</p>
         <label class="ck-row" style="display:flex; align-items:flex-start; gap:8px; margin-bottom:12px; cursor:pointer;">
           <input type="checkbox" id="burcuAkcayDemo" style="margin-top:2px" ${DB.burcuAkcayDemo ? 'checked' : ''} />
           <span>Testklant Burcu (demo) — klant + afspraken uit bestand inladen</span>
@@ -4574,13 +4595,22 @@ function renderDataPanel() {
     if (!confirm('Alle data wissen? Dit kan niet ongedaan worden.')) return;
     if (!confirm('Echt zeker?')) return;
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(SALON_SEED_KEY);
     DB = loadData();
     applyBurcuAkcayOverride();
     showView('home');
     renderHome();
     renderAgenda();
     renderClients('');
-    showToast('Alle data gewist');
+    showToast('Data gewist — klanten worden opnieuw geladen…');
+    void bootstrapSalonFromHostedSeed().then(async () => {
+      await tryMergeBundledSalonwareCsv();
+      await tryImportBundledAfsprakenKlantenCsv();
+      renderClients($('#searchClient')?.value || '');
+      renderAgenda();
+      renderHome();
+      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
+    });
   });
 }
 
@@ -6214,12 +6244,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!seeded && (DB.clients || []).length === 0) {
       await tryImportBundledSalonwareCsv();
     }
-    if (seeded) {
-      const bits = [`${DB.clients.length} klanten`, `${DB.appointments.length} afspraken (exacte bedragen)`];
+    await tryImportBundledAfsprakenKlantenCsv();
+    if (seeded || merged) {
+      const bits = [`${DB.clients.length} klanten`, `${DB.appointments.length} afspraken`];
       if (merged && (merged.updated || merged.added)) bits.push(`${merged.updated} notities bijgewerkt`);
       showToast(bits.join(' · '));
-    } else if (merged && merged.updated) {
-      showToast(`${merged.updated} klanten — notities bijgewerkt uit Salonware CSV`);
     }
     try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
     try {

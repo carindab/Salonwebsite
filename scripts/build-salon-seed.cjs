@@ -10,7 +10,7 @@ const path = require("path");
 const KLANTEN_CSV = path.join(__dirname, "..", "salonware-download (2).csv");
 const AFSPRAKEN_CSV = path.join(__dirname, "..", "Afspraken klanten.csv");
 const OUT = path.join(__dirname, "..", "salon-seed.json");
-const SEED_VERSION = 3;
+const SEED_VERSION = 4;
 const TODAY = new Date().toISOString().slice(0, 10);
 const T_REF = "t130";
 const P_REF = "p020";
@@ -482,18 +482,35 @@ function buildAppointmentsForClient(row, H, clientId, extId) {
   const notes = col("opmerkingen") > -1 ? r(row, col("opmerkingen")) : "";
   const notesInternal = col("opmerkingen_intern") > -1 ? r(row, col("opmerkingen_intern")) : "";
   const e1 = col("eersteafspraak") > -1 ? normalizeDate(r(row, col("eersteafspraak"))) : "";
-  const e2raw = col("laatsteafspraak") > -1 ? normalizeDate(r(row, col("laatsteafspraak"))) : "";
+  let e2 = col("laatsteafspraak") > -1 ? normalizeDate(r(row, col("laatsteafspraak"))) : "";
+  if (e2 > TODAY) e2 = TODAY;
+
+  const bA = col("afspraakomzet") > -1 ? parseMoney(r(row, col("afspraakomzet"))) : 0;
+  const bP = col("productomzet") > -1 ? parseMoney(r(row, col("productomzet"))) : 0;
+  const rawAantBeh = col("aantalbehandelingen") > -1 ? parseInt(r(row, col("aantalbehandelingen")) || "0", 10) : 0;
+  const rawAantProd = col("aantalproducten") > -1 ? parseInt(r(row, col("aantalproducten")) || "0", 10) : 0;
+  const nB = bA > 0 ? (rawAantBeh > 0 ? rawAantBeh : 1) : 0;
+  const nP = bP > 0 ? (rawAantProd > 0 ? rawAantProd : 1) : 0;
 
   const noteLines = linesFromNotes(notes, notesInternal);
-  const yearHint = inferYearFromNotes(noteLines) || parseInt(String(e1 || TODAY).slice(0, 4), 10) || undefined;
+  const fullPlain = [notes, notesInternal].filter(Boolean).join("\n\n");
+  const allMoney = extractMoneyFromString(fullPlain);
+  const treatHints = noteLines.filter(isTreatishLine).flatMap((l) => extractMoneyFromString(l));
+  const prodHints = noteLines.filter(isProduishLine).flatMap((l) => extractMoneyFromString(l));
+
+  const yearHint = inferYearFromNotes(noteLines) || parseInt(String(e2 || e1 || TODAY).slice(0, 4), 10) || undefined;
   const parsedVisits = parseVisitsFromNotes(notes, notesInternal, yearHint);
   const exact = selectExactVisits(parsedVisits);
+  const usedKeys = new Set();
   const appts = [];
   const dayOrder = new Map();
   let seq = 0;
 
-  function pushAppt(ymd, item) {
+  function pushAppt(ymd, item, tag, note) {
     if (!ymd) return;
+    const key = `${ymd}|${item.savedName}|${item.price}|${tag}`;
+    if (usedKeys.has(key)) return;
+    usedKeys.add(key);
     const o = (dayOrder.get(ymd) || 0) + 1;
     dayOrder.set(ymd, o);
     seq++;
@@ -504,14 +521,59 @@ function buildAppointmentsForClient(row, H, clientId, extId) {
       time: timeForOrder(o - 1),
       status: ymd >= TODAY ? "gepland" : "afgerond",
       paid: ymd < TODAY,
-      notes: "Salonware — bedrag uit notitie",
+      notes: note,
       items: [item],
-      importTag: "salon-seed-v3",
+      importTag: tag,
     });
   }
 
+  let exactBeh = 0;
+  let exactProd = 0;
+  let exactBehSum = 0;
+  let exactProdSum = 0;
   for (const v of exact) {
-    pushAppt(v.date, makeItem(v.kind, v.label, v.price));
+    pushAppt(v.date, makeItem(v.kind, v.label, v.price), "salon-seed-v4-exact", "Salonware — bedrag uit notitie");
+    if (v.kind === "product") {
+      exactProd++;
+      exactProdSum += v.price || 0;
+    } else {
+      exactBeh++;
+      exactBehSum += v.price || 0;
+    }
+  }
+
+  const needB = Math.max(0, nB - exactBeh);
+  const needP = Math.max(0, nP - exactProd);
+  const budgetB = Math.max(0, Math.round((bA - exactBehSum) * 100));
+  const budgetP = Math.max(0, Math.round((bP - exactProdSum) * 100));
+
+  if (needB > 0 && budgetB > 0 && (e1 || e2)) {
+    const labels = pickTreatmentLabels(noteLines, needB);
+    const weights = takeWeightsOrPad(treatHints.length ? treatHints : allMoney, needB);
+    const prices = splitToTargetCentsByWeights(budgetB, weights);
+    const dates = spreadDateStrings(e1, e2, needB);
+    for (let k = 0; k < needB; k++) {
+      pushAppt(
+        dates[k] || e2 || e1,
+        makeItem("treatment", labels[k], prices[k]),
+        "salon-seed-v4-hist",
+        "Salonware historie (bedrag verdeeld uit totaal omzet)"
+      );
+    }
+  }
+  if (needP > 0 && budgetP > 0 && (e1 || e2)) {
+    const labels = pickProductLabels(noteLines, needP);
+    const weights = takeWeightsOrPad(prodHints.length ? prodHints : allMoney, needP);
+    const prices = splitToTargetCentsByWeights(budgetP, weights);
+    const dates = spreadDateStrings(e1, e2, needP);
+    for (let k = 0; k < needP; k++) {
+      pushAppt(
+        dates[k] || e2 || e1,
+        makeItem("product", labels[k], prices[k]),
+        "salon-seed-v4-hist",
+        "Salonware historie — product"
+      );
+    }
   }
 
   appts.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
