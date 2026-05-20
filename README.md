@@ -88,7 +88,9 @@ Er staat een workflow klaar: [`.github/workflows/deploy-pages.yml`](.github/work
    git push -u origin main
    ```
 
-4. Op GitHub: **Settings → Pages → Build and deployment → Source**: kies **GitHub Actions**.
+4. Op GitHub: **Settings → Pages → Build and deployment → Source**: kies **GitHub Actions** (eenmalig; daarna pushen is genoeg).
+
+   **Let op:** op een gratis persoonlijk account kan **GitHub Pages voor deze site alleen bij een publieke repository**. Een privé-repo geeft dan geen werkende Pages-site (`422` bij inschakelen). De inhoud van de repo — dus ook CSV’s met klanten — is bij **public** voor iedereen zichtbaar. Wil je geen CSV online: zet die bestanden niet in Git, gebruik alleen een **geanonimiseerde** demo-export, of kies betaald/hosting elders.
 
 5. Ga naar het tabje **Actions**, wacht tot **Deploy to GitHub Pages** groen is. Daarna vind je onder **Settings → Pages** bij **Visit site** de URL, meestal:
 
