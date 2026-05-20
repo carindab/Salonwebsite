@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js V7 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v25';
+console.log('%c[Salon Beheer] salon-app.js v26 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v26';
 /** v10: negeer v9 (o.a. CSV-upload bij file:// bleef in localStorage hangen). */
 const STORAGE_KEY = 'salon-data-v10';
 
@@ -1820,6 +1820,19 @@ function purgeGhostFutureLaatsteImportedApts() {
     a => !(a.importTag === AFSPRAKEN_IMPORT_TAG && a.importSlot === 'laatste' && a.date > t)
   );
   return n0 - DB.appointments.length;
+}
+
+/** Verwijdert alle agenda-items van een eerdere “Afspraken inplannen” CSV-import — daarna kun je hetzelfde bestand opnieuw kiezen (nieuwe datums-/notitielogica, geen “dubbel”-blokkade door oude data). */
+function wipeAllImportedAfsprakenKlantenAppointments() {
+  const before = (DB.appointments || []).length;
+  DB.appointments = (DB.appointments || []).filter(a => a.importTag !== AFSPRAKEN_IMPORT_TAG);
+  const rm = before - DB.appointments.length;
+  saveData(DB);
+  try {
+    renderAgenda();
+    renderHome();
+  } catch (e) { /* */ }
+  return rm;
 }
 
 /**
@@ -5814,6 +5827,15 @@ document.addEventListener('DOMContentLoaded', () => {
   if ($('#afsprakenKlantenBundled') && location.protocol === 'file:') {
     $('#afsprakenKlantenBundled').hidden = true;
   }
+  $('#wipeImportedAfspraken')?.addEventListener('click', () => {
+    if (!confirm(
+      'Alle agenda-items wissen die ooit zijn ingelezen met “Afspraken inplannen”?\n'
+      + 'Eigen afspraken die je los in de agenda hebt gezet blijven staan.\n\n'
+      + 'Daarna: kies opnieuw je CSV-bestand onder “Afspraken inplannen”.'
+    )) return;
+    const n = wipeAllImportedAfsprakenKlantenAppointments();
+    showToast(n ? `${n} import-afspraken verwijderd — nu opnieuw CSV kiezen` : 'Niets verwijderd (geen import-afspraken)');
+  });
   $('#clientDetailDrawerClose')?.addEventListener('click', () => closeClientDetailDrawer());
   $('#clientDetailDrawerBackdrop')?.addEventListener('click', () => closeClientDetailDrawer());
 
