@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v27 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v27';
+console.log('%c[Salon Beheer] salon-app.js v28 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v28';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -1448,11 +1448,22 @@ function getAgendaSlotRange(weekDates, appsByDay, mode) {
     endMin: Math.min(AGENDA_GRID_END_MIN, Math.ceil(close / 5) * 5),
   };
 }
+function getAgendaMinHeightPx(contentH) {
+  if (typeof window === 'undefined') return contentH;
+  const reserve = window.innerWidth <= 900 ? 210 : 190;
+  return Math.max(contentH, window.innerHeight - reserve);
+}
 function updateAgendaViewToggle() {
   const mode = getAgendaViewMode();
   document.querySelectorAll('.agenda-view-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.agendaView === mode);
   });
+}
+function agendaSlotInnerHtml(dateISO, slot, workSlot) {
+  if (pendingKopieDraft && workSlot) {
+    return `<span class="agenda-place-hint"><span class="agenda-place-time">${slot}</span> Plaats hier</span>`;
+  }
+  return `<span class="agenda-cell-time" aria-hidden="true">${slot}</span>`;
 }
 function getAgendaSlotPx() {
   if (typeof window === 'undefined') return AGENDA_SLOT_PX_DESKTOP;
@@ -1517,7 +1528,6 @@ function renderAgenda() {
 
   // Kolommen met vaste 5-min rijen; afspraken als overlay (kruist niet met andere dagen)
   const tbody = $('#agendaTbody');
-  const cellTime = (slot) => `<span class="agenda-cell-time" aria-hidden="true">${slot}</span>`;
   const appBlock = (a, topPx, heightPx) => {
     const c = findClient(a.clientId);
     const durMins = appointmentDurationMins(a);
@@ -1535,14 +1545,17 @@ function renderAgenda() {
   };
   const spx = getAgendaSlotPx();
   const baseH = slots.length * spx;
+  const minColH = getAgendaMinHeightPx(baseH);
   const cols = weekDates.map(d => {
     const work = isWorkWeek(d);
     const apps = appsByDay[d] || [];
     const slotEls = slots.map(slot => {
       const workSlot = isAgendaSlotWorkTime(d, slot);
       const cls = workSlot ? 'agenda-slot' : 'agenda-slot agenda-slot--closed';
-      return `<div class="${cls}" data-date="${d}" data-slot="${slot}">${cellTime(slot)}</div>`;
+      return `<div class="${cls}" data-date="${d}" data-slot="${slot}">${agendaSlotInnerHtml(d, slot, workSlot)}</div>`;
     }).join('');
+    const fillerH = Math.max(0, minColH - baseH);
+    const filler = fillerH > 0 ? `<div class="agenda-slot-filler" style="height:${fillerH}px" aria-hidden="true"></div>` : '';
     const blocks = apps.map((a) => {
       const idx = slotIndexForTime(a.time, slots);
       const visDur = agendaVisualDurationMins(a, d);
@@ -1551,7 +1564,7 @@ function renderAgenda() {
       const top = idx * spx;
       return appBlock(a, top, h);
     }).join('');
-    return `<div class="agenda-day-col${!work ? ' free-day-col' : ''}" data-date="${d}" style="min-height:${baseH}px"><div class="agenda-day-slots">${slotEls}</div><div class="agenda-day-apps">${blocks}</div></div>`;
+    return `<div class="agenda-day-col${!work ? ' free-day-col' : ''}" data-date="${d}" style="min-height:${minColH}px"><div class="agenda-day-slots">${slotEls}${filler}</div><div class="agenda-day-apps">${blocks}</div></div>`;
   }).join('');
   tbody.innerHTML = '<div class="agenda-cols" role="presentation">' + cols + '</div>';
 
@@ -4409,12 +4422,13 @@ function startKopiePlacing(sourceAppt, wekenStr) {
     items: treatments.map(it => ({ ...it })),
     notes: sourceAppt.notes || '',
     anchorDate,
+    sourceId: sourceAppt.id,
   };
   agendaCurrentDate = anchorDate;
   closeModal();
   showView('agenda');
   renderAgenda();
-  showToast(`Klik op een tijdvak in de week van ${fmtDate(anchorDate)} om de kopie te plaatsen`);
+  showToast('Kies dag en tijd — klik op “Plaats hier” in de agenda');
   return true;
 }
 function openKopieModal(id) {
@@ -4438,7 +4452,7 @@ function openKopieModal(id) {
   ].join('');
   openModal('Kopie inplannen', `
     <div class="form kopie-inplan" style="grid-template-columns:1fr;">
-      <p class="kopie-intro">Er wordt een kopie van de bestaande reservering gemaakt. Kies een week — daarna gaat u naar de agenda om een tijdvak te kiezen.</p>
+      <p class="kopie-intro">Kies hoeveel weken later. U gaat daarna naar de agenda en kiest <strong>zelf</strong> dag en tijd — er wordt nog niets geboekt.</p>
       <p style="font-size:13px; color:var(--muted); margin:0 0 12px;">Alleen behandelingen worden meegenomen (geen producten).</p>
       <ul class="kopie-trt-list">
         ${treatments.map(it => `<li>${escapeHtml(describeItem(it))}</li>`).join('')}
@@ -4451,12 +4465,15 @@ function openKopieModal(id) {
       </div>
       <div class="kopie-actions">
         <button type="button" class="btn ghost" id="cancelKopie">Annuleren</button>
-        <button type="button" class="btn primary" id="kopieGoAgenda">Ga naar agenda</button>
+        <button type="button" class="btn primary" id="kopieGoAgenda">Bekijk agenda &amp; kies tijd</button>
       </div>
     </div>
   `);
   $('#modalBox')?.classList.add('kopie-modal');
   $('#cancelKopie').addEventListener('click', closeModal);
+  $('#kopieWekenSelect')?.addEventListener('change', (e) => {
+    e.stopPropagation();
+  });
   $('#kopieGoAgenda').addEventListener('click', () => {
     const v = $('#kopieWekenSelect')?.value;
     if (!v) { showToast('Kies eerst een week'); return; }
@@ -6728,6 +6745,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (pendingKopieDraft) {
         const date = cell.dataset.date || agendaCurrentDate;
         const time = cell.dataset.slot || '10:00';
+        if (!isAgendaSlotWorkTime(date, time)) {
+          showToast('Kies een tijd binnen openingstijden');
+          return;
+        }
         const newApp = {
           id: uid('a'),
           date,
@@ -6742,9 +6763,9 @@ document.addEventListener('DOMContentLoaded', () => {
         saveData(DB);
         pendingKopieDraft = null;
         document.body.classList.remove('kopie-placing');
+        agendaCurrentDate = date;
         renderAgenda();
         showToast(`Kopie geplaatst op ${fmtDate(date)} ${time}`);
-        openAppointmentModal(newApp);
         return;
       }
       openAppointmentModal({ id:'', date: cell.dataset.date||agendaCurrentDate, time: cell.dataset.slot||'10:00', clientId:'', items:[], status:'gepland', paid:false, notes:'' });

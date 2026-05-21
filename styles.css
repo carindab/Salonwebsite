@@ -832,15 +832,71 @@ body.client-drawer-open {
   color: var(--text);
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
-.agenda-scroll.agenda-scroll--compact { max-height: none; overflow-y: visible; }
+.view[data-view="agenda"]:not(.hidden) {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 48px);
+}
+.view[data-view="agenda"] .agenda-week-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+  background: var(--bg);
+  border-color: #e0d8d0;
+  box-shadow: none;
+}
+.view[data-view="agenda"] .agenda-week-card .card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+.view[data-view="agenda"] .agenda-scroll {
+  flex: 1;
+  min-height: calc(100vh - 210px);
+  max-height: none;
+  background: var(--bg);
+}
+.agenda-scroll.agenda-scroll--compact { max-height: none; overflow-y: auto; }
+.agenda-slot-filler {
+  background: var(--bg);
+  border-bottom: 0;
+  pointer-events: none;
+}
+.agenda-place-hint {
+  display: none;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.2;
+  padding: 0 2px;
+}
+.agenda-place-time { display: block; font-size: 10px; opacity: 0.85; }
+body.kopie-placing .agenda-slot:not(.agenda-slot--closed) {
+  cursor: pointer;
+}
+body.kopie-placing .agenda-slot:not(.agenda-slot--closed):hover,
+body.kopie-placing .agenda-slot:not(.agenda-slot--closed):focus-within {
+  background: #5c5650;
+  color: #fff;
+  z-index: 3;
+}
+body.kopie-placing .agenda-slot:not(.agenda-slot--closed):hover .agenda-cell-time,
+body.kopie-placing .agenda-slot:not(.agenda-slot--closed):hover .agenda-place-hint {
+  display: block;
+  color: #fff;
+}
+body.kopie-placing .agenda-slot:not(.agenda-slot--closed) .agenda-cell-time {
+  display: block;
+}
+body.kopie-placing .agenda-slot:not(.agenda-slot--closed):hover .agenda-cell-time {
+  display: none;
+}
 .agenda-kopie-hint {
   background: #fff8e6 !important;
   border-color: #e8c96a !important;
-}
-body.kopie-placing .agenda-slot:not(.agenda-slot--closed) {
-  cursor: copy;
-  outline: 1px dashed rgba(138, 106, 74, 0.35);
-  outline-offset: -1px;
 }
 .agenda-empty-hint {
   margin: 0 0 10px 0;
