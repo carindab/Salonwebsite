@@ -107,6 +107,24 @@ Je zou moeten zien: `"ok": true`
 
 ---
 
+## Stap 4b — Login aanmaken (beveiliging)
+
+1. Voer eerst opnieuw **install** uit (nieuwe tabellen voor login):
+   ```
+   https://agenda.eliminstituut.nl/api/install.php?key=JOUW_INSTALL_KEY
+   ```
+2. Maak je account aan (eenmalig):
+   ```
+   https://agenda.eliminstituut.nl/api/setup-user.php?key=JOUW_INSTALL_KEY
+   ```
+3. Vul e-mail + wachtwoord in (min. 8 tekens)
+4. Ga naar **https://agenda.eliminstituut.nl/** en log in
+5. Vink **Onthouden op dit apparaat** aan (standaard aan) — je telefoon blijft ingelogd
+
+**Beveiliging:** zonder login zien bezoekers alleen het inlogscherm. Klantdata (`salon-seed.json`, CSV's) is niet meer publiek downloadbaar.
+
+---
+
 ## Stap 5 — Klanten en afspraken importeren
 
 Open:

@@ -398,6 +398,8 @@ const SALON_API_KEY_STORAGE = 'salon-api-key';
 const SALON_SERVER_REVISION_KEY = 'salon-server-revision';
 const SALON_SERVER_SYNC_PREF = 'salon-server-sync-enabled';
 
+let authUser = null;
+
 const serverSync = {
   enabled: false,
   available: false,
@@ -431,8 +433,144 @@ function isServerSyncPreferred() {
 function salonApiHeaders() {
   const h = { Accept: 'application/json' };
   const key = getSalonApiKey();
-  if (key) h['X-Salon-Key'] = key;
+  if (key && !authUser) h['X-Salon-Key'] = key;
   return h;
+}
+
+function salonApiFetch(url, opts = {}) {
+  return fetch(url, {
+    ...opts,
+    credentials: 'include',
+    headers: { ...salonApiHeaders(), ...(opts.headers || {}) },
+  });
+}
+
+function hasServerAccess() {
+  return !!authUser || !!getSalonApiKey();
+}
+
+function showLoginGate(setupRequired) {
+  const gate = $('#loginGate');
+  if (!gate) return;
+  gate.classList.remove('hidden');
+  gate.setAttribute('aria-hidden', 'false');
+  $('#appRoot')?.classList.add('hidden');
+  const err = $('#loginError');
+  if (err && setupRequired) {
+    err.textContent = 'Nog geen account. Maak eerst je login aan via api/setup-user.php (eenmalig).';
+    err.classList.remove('hidden');
+  }
+}
+
+function hideLoginGate() {
+  $('#loginGate')?.classList.add('hidden');
+  $('#loginGate')?.setAttribute('aria-hidden', 'true');
+  $('#appRoot')?.classList.remove('hidden');
+}
+
+async function checkAuthSession() {
+  const base = getSalonApiBase();
+  if (!base) return { ok: true, local: true };
+  try {
+    const res = await salonApiFetch(`${base}/auth.php?action=me`, { cache: 'no-store' });
+    const data = await res.json().catch(() => ({}));
+    if (data.ok && data.user) {
+      authUser = data.user;
+      return { ok: true, user: data.user };
+    }
+    return { ok: false, setupRequired: !!data.setupRequired, loginRequired: !!data.loginRequired };
+  } catch (e) {
+    if (location.hostname.includes('github.io') || location.protocol === 'file:') {
+      return { ok: true, local: true };
+    }
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+async function loginWithPassword(email, password, remember) {
+  const base = getSalonApiBase();
+  if (!base) return false;
+  const res = await salonApiFetch(`${base}/auth.php?action=login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, remember: !!remember }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!data.ok) {
+    const err = $('#loginError');
+    if (err) {
+      err.textContent = data.error || 'Inloggen mislukt';
+      err.classList.remove('hidden');
+    }
+    return false;
+  }
+  authUser = data.user;
+  $('#loginError')?.classList.add('hidden');
+  hideLoginGate();
+  return true;
+}
+
+async function logoutSession() {
+  const base = getSalonApiBase();
+  if (base) {
+    try {
+      await salonApiFetch(`${base}/auth.php?action=logout`);
+    } catch (e) { /* */ }
+  }
+  authUser = null;
+  serverSync.enabled = false;
+  showLoginGate();
+}
+
+async function ensureAuthenticated() {
+  const auth = await checkAuthSession();
+  if (auth.ok) {
+    hideLoginGate();
+    return true;
+  }
+  showLoginGate(auth.setupRequired);
+  return false;
+}
+
+function bindLoginForm() {
+  $('#loginForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = $('#loginSubmit');
+    if (btn) btn.disabled = true;
+    const ok = await loginWithPassword(
+      $('#loginEmail')?.value || '',
+      $('#loginPassword')?.value || '',
+      $('#loginRemember')?.checked
+    );
+    if (btn) btn.disabled = false;
+    if (!ok) return;
+    await startAppAfterLogin();
+  });
+  $('#logoutBtn')?.addEventListener('click', () => {
+    if (!confirm('Uitloggen op dit apparaat?')) return;
+    void logoutSession();
+  });
+}
+
+async function startAppAfterLogin() {
+  $('#brandName').textContent = DB.settings.salonName || 'Salon';
+  showView('home');
+  const synced = await initServerDatabaseSync();
+  if (!synced && (DB.clients || []).length === 0) {
+    await bootstrapSalonFromHostedSeed(true);
+    await tryMergeBundledElimCsv();
+    await tryMergeBundledSalonwareStats();
+  }
+  if ((DB.clients || []).length < 50 && getSalonApiBase()) {
+    showToast('Weinig data — ga naar Instellingen → Data → Seed naar database importeren');
+  }
+  try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
+  renderClients($('#searchClient')?.value || '');
+  renderAgenda();
+  renderHome();
+  if ((DB.clients || []).length > 100) {
+    showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
+  }
 }
 
 function applyServerPayload(payload) {
@@ -481,7 +619,7 @@ async function checkServerDatabaseHealth() {
   const base = getSalonApiBase();
   if (!base) return { ok: false, error: 'Geen webserver' };
   try {
-    const res = await fetch(`${base}/health.php`, { cache: 'no-store' });
+    const res = await salonApiFetch(`${base}/health.php`, { cache: 'no-store' });
     const data = await res.json();
     serverSync.available = !!data.ok;
     if (data.counts) serverSync.counts = data.counts;
@@ -495,17 +633,19 @@ async function checkServerDatabaseHealth() {
 
 async function loadDatabaseFromServer(opts = {}) {
   const base = getSalonApiBase();
-  const key = getSalonApiKey();
   if (!base) {
     showToast('Open de site via je Hostinger-domein.');
     return false;
   }
-  if (!key) {
-    showToast('Vul eerst je API-sleutel in onder Instellingen → Data.');
-    return false;
+  if (!hasServerAccess()) {
+    if (authUser) serverSync.enabled = true;
+    else {
+      showToast('Log in om data te laden.');
+      return false;
+    }
   }
   try {
-    const res = await fetch(`${base}/load.php`, { headers: salonApiHeaders(), cache: 'no-store' });
+    const res = await salonApiFetch(`${base}/load.php`, { cache: 'no-store' });
     const data = await res.json();
     if (!data.ok) {
       serverSync.lastError = data.error || 'Laden mislukt';
@@ -530,14 +670,15 @@ async function loadDatabaseFromServer(opts = {}) {
 async function saveDatabaseToServer(opts = {}) {
   const base = getSalonApiBase();
   const key = getSalonApiKey();
-  if (!base || !key || !serverSync.enabled) return false;
+  if (!base || !serverSync.enabled) return false;
+  if (!hasServerAccess()) return false;
   if (serverSync.saving) return false;
 
   serverSync.saving = true;
   try {
-    const res = await fetch(`${base}/save.php`, {
+    const res = await salonApiFetch(`${base}/save.php`, {
       method: 'POST',
-      headers: { ...salonApiHeaders(), 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildServerSavePayload()),
     });
     const data = await res.json();
@@ -567,7 +708,7 @@ async function saveDatabaseToServer(opts = {}) {
 }
 
 function scheduleServerDatabaseSave() {
-  if (!serverSync.enabled || !getSalonApiKey()) return;
+  if (!serverSync.enabled || !hasServerAccess()) return;
   clearTimeout(serverSync.saveTimer);
   serverSync.saveTimer = setTimeout(() => {
     void saveDatabaseToServer({ quiet: true });
@@ -577,17 +718,16 @@ function scheduleServerDatabaseSave() {
 async function importSeedToServerDatabase() {
   const base = getSalonApiBase();
   const key = getSalonApiKey();
-  if (!base || !key) {
-    showToast('API-sleutel vereist');
+  if (!base || !hasServerAccess()) {
+    showToast('Je moet ingelogd zijn');
     return false;
   }
   if (!confirm('Alle klanten en afspraken uit salon-seed.json naar MySQL importeren? Bestaande database-data wordt overschreven.')) {
     return false;
   }
   try {
-    const res = await fetch(`${base}/seed-import.php`, {
+    const res = await salonApiFetch(`${base}/seed-import.php`, {
       method: 'POST',
-      headers: salonApiHeaders(),
     });
     const data = await res.json();
     if (!data.ok) {
@@ -611,8 +751,7 @@ async function initServerDatabaseSync() {
   const health = await checkServerDatabaseHealth();
   if (!health.ok) return false;
 
-  const key = getSalonApiKey();
-  if (!key) return false;
+  if (!hasServerAccess() && !getSalonApiBase()) return false;
 
   serverSync.enabled = true;
   const loaded = await loadDatabaseFromServer({ quiet: true });
@@ -4898,7 +5037,7 @@ function renderAlgemeen() {
 /* ---------- Data & backup ---------- */
 function renderDataPanel() {
   const el = $('#spanel-data');
-  const syncOn = serverSync.enabled && !!getSalonApiKey();
+  const syncOn = serverSync.enabled && hasServerAccess();
   const syncStatus = syncOn
     ? (serverSync.lastError
       ? `<span style="color:#c0392b;">Fout: ${escapeHtml(serverSync.lastError)}</span>`
@@ -4911,12 +5050,16 @@ function renderDataPanel() {
     <div class="card">
       <div class="card-title">Database (Hostinger MySQL)</div>
       <div class="card-body">
-        <p>Sla klanten en afspraken op in je <strong>Hostinger MySQL-database</strong>. Telefoon en computer gebruiken dan dezelfde data.</p>
+        <p>Sla klanten en afspraken op in je <strong>Hostinger MySQL-database</strong>. Log in met e-mail + wachtwoord — telefoon en computer delen dezelfde data.</p>
         <p style="font-size:13px; margin:0 0 10px 0;">${syncStatus}</p>
-        <div class="dos-row" style="margin-bottom:10px;">
-          <label>API-sleutel</label>
-          <input type="password" id="salonApiKey" value="${escapeHtml(getSalonApiKey())}" placeholder="Zelfde als SALON_API_KEY in api/config.php" autocomplete="off" />
-        </div>
+        ${authUser ? `<p style="font-size:13px;">Ingelogd als <strong>${escapeHtml(authUser.email)}</strong> · <button type="button" class="btn ghost small" id="logoutFromSettings">Uitloggen</button></p>` : ''}
+        <details style="margin-bottom:12px; font-size:13px; color:var(--muted);">
+          <summary>Geavanceerd: API-sleutel (optioneel)</summary>
+          <div class="dos-row" style="margin-top:8px;">
+            <label>API-sleutel</label>
+            <input type="password" id="salonApiKey" value="${escapeHtml(getSalonApiKey())}" placeholder="Alleen nodig zonder login" autocomplete="off" />
+          </div>
+        </details>
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
           <button class="btn primary" id="connectDatabase">🔗 Verbinden &amp; laden</button>
           <button class="btn ghost" id="saveToDatabase">💾 Nu opslaan naar database</button>
@@ -4973,6 +5116,7 @@ function renderDataPanel() {
     serverSync.enabled = true;
     void importSeedToServerDatabase().then(ok => { if (ok) renderDataPanel(); });
   });
+  $('#logoutFromSettings')?.addEventListener('click', () => void logoutSession());
   $('#exportAll').addEventListener('click', () => downloadFile('salon-backup.json', JSON.stringify(DB,null,2), 'application/json'));
   $('#reloadFromServer')?.addEventListener('click', () => {
     if (!confirm('Alle klanten en afspraken opnieuw laden vanaf GitHub? Je wijzigingen sinds de laatste backup gaan verloren.')) return;
@@ -6367,8 +6511,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (inBeh) switchBeheerTab(tab.dataset.tab);
   });
 
-  // Reset: alles wissen (klanten / afspraken / betalingen) behalve catalogus & instellingen
-  $('#resetDemo').addEventListener('click', () => {
+  // Reset demo-knop vervangen door uitloggen (#logoutBtn in bindLoginForm)
+  $('#resetDemo')?.addEventListener('click', () => {
     if (!confirm('Alle klanten, afspraken, cadeaubonnen en geboekte data wissen? Diensten en productprijzen blijven; productvoorraad = start. Zeker weten?')) return;
     clearAllTransactionalData();
     showView('home');
@@ -6659,41 +6803,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tab) switchSettingsTab(tab.dataset.stab);
   });
 
-  // Init
-  $('#brandName').textContent = DB.settings.salonName || 'Salon';
-  showView('home');
+  bindLoginForm();
 
-  void initServerDatabaseSync().then(async synced => {
-    if (synced) {
-      try {
-        renderClients($('#searchClient')?.value || '');
-        renderAgenda();
-        renderHome();
-      } catch (e) { /* */ }
-      return;
+  // Init — eerst inloggen (Hostinger), daarna data laden
+  void ensureAuthenticated().then(async authed => {
+    if (!authed) return;
+    await startAppAfterLogin();
+  }).catch(e => {
+    console.error('[Salon] init:', e);
+    if (getSalonApiBase()) showLoginGate();
+    else {
+      hideLoginGate();
+      void startAppAfterLogin();
     }
-    return bootstrapSalonFromHostedSeed(needsFullDataReload()).then(async seeded => {
-    const elim = await tryMergeBundledElimCsv();
-    const stats = await tryMergeBundledSalonwareStats();
-    if (!seeded && (DB.clients || []).length === 0) {
-      await tryImportBundledSalonwareCsv();
-    }
-    if (seeded || elim || stats || needsFullDataReload()) {
-      const bits = [`${DB.clients.length} klanten`, `${DB.appointments.length} afspraken`];
-      if (elim && (elim.updated || elim.added)) bits.push(`${elim.updated} notities bijgewerkt`);
-      if (seeded || (DB.clients.length > 100 && DB.appointments.length > 500)) {
-        showToast(bits.join(' · '));
-      } else if ((DB.clients || []).length < 50) {
-        showToast('Weinig data geladen — klik Instellingen → Gegevens opnieuw laden');
-      }
-    }
-    try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
-    try {
-      renderClients($('#searchClient')?.value || '');
-      renderAgenda();
-      renderHome();
-    } catch (e) { /* */ }
-    });
   });
 
   // ---- AUTO-AFBOEKEN OM 21:00 NL TIJD ----

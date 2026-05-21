@@ -1,5 +1,10 @@
 DirectoryIndex index.html index.php
 
+# Gevoelige bestanden — niet publiek downloadbaar
+<FilesMatch "\.(csv|json)$">
+  Require all denied
+</FilesMatch>
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteRule ^api/config\.php$ - [F,L]

@@ -964,7 +964,79 @@ body.client-drawer-open {
   }
 }
 
-/* Afspraak beheren modal (large) */
+/* ---------- Login (Hostinger) ---------- */
+.login-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(145deg, #e8f2ea 0%, #f7faf7 45%, #eef5f0 100%);
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.login-gate.hidden { display: none; }
+.login-card {
+  width: min(420px, 100%);
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 16px 48px rgba(45, 90, 61, 0.12);
+  padding: 28px 24px 24px;
+}
+.login-brand {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--accent, #5fa463);
+  margin-bottom: 6px;
+}
+.login-title {
+  margin: 0 0 4px;
+  font-size: 24px;
+  color: #2d5a3d;
+}
+.login-sub {
+  margin: 0 0 20px;
+  color: var(--muted, #667);
+  font-size: 14px;
+}
+.login-form { display: grid; gap: 0; }
+.login-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 12px 0 6px;
+}
+.login-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 10px;
+  font-size: 16px;
+}
+.login-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 16px 0 8px;
+  font-size: 14px;
+  color: var(--text, #333);
+  cursor: pointer;
+}
+.login-remember input { margin-top: 3px; flex-shrink: 0; }
+.login-submit { width: 100%; margin-top: 8px; padding: 13px; font-size: 16px; }
+.login-error {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: #fdecea;
+  color: #c0392b;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.login-error.hidden { display: none; }
+.app.hidden { display: none !important; }
+
 .modal.large { width: 920px; max-width: calc(100% - 40px); }
 .appt-layout { display: grid; grid-template-columns: 1fr 190px; gap: 0; min-height: 400px; }
 .appt-main { overflow-y: auto; max-height: 78vh; }

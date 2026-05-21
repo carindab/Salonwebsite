@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/session.php';
+
 salon_cors();
 salon_require_auth();
 

@@ -25,7 +25,11 @@ function salon_json_out(array $data, int $code = 200): void
 
 function salon_cors(): void
 {
-    header('Access-Control-Allow-Origin: *');
+    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+    if ($origin !== '') {
+        header('Access-Control-Allow-Origin: ' . $origin);
+        header('Access-Control-Allow-Credentials: true');
+    }
     header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
     header('Access-Control-Allow-Headers: Content-Type, X-Salon-Key');
     if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -34,7 +38,7 @@ function salon_cors(): void
     }
 }
 
-function salon_require_auth(): void
+function salon_require_auth_legacy(): void
 {
     if (!defined('SALON_API_KEY') || SALON_API_KEY === '' || SALON_API_KEY === 'wijzig-dit-naar-een-lang-willekeurig-wachtwoord') {
         salon_json_out(['ok' => false, 'error' => 'SALON_API_KEY niet ingesteld in config.php'], 503);
