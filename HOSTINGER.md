@@ -107,6 +107,18 @@ Je zou moeten zien: `"ok": true`
 
 ---
 
+## Fout: config.php ontbreekt
+
+Zie je `config.php ontbreekt`? Open in je browser:
+
+```
+https://agenda.eliminstituut.nl/api/configure.php?key=tijdelijk-installatie-wachtwoord
+```
+
+Vul je MySQL-gegevens uit hPanel in → daarna automatisch install → setup-user voor je login.
+
+---
+
 ## Stap 4b — Login aanmaken (beveiliging)
 
 1. Voer eerst opnieuw **install** uit (nieuwe tabellen voor login):
