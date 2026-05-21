@@ -60,7 +60,8 @@ $userCount = salon_users_count($pdo);
 </head>
 <body>
   <div class="box">
-    <h1>Eerste login aanmaken</h1>
+    <h1>Stap 2 — Jouw login</h1>
+    <p class="steps-hint" style="color:#888;font-size:13px;margin:0 0 12px;">Alleen voor jou: e-mail + wachtwoord om in te loggen op telefoon en computer.</p>
     <?php if ($userCount > 0 && !$message): ?>
       <p class="ok">Er is al een account. Ga naar <a href="/">agenda.eliminstituut.nl</a> om in te loggen.</p>
     <?php else: ?>
