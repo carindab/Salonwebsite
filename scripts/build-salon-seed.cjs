@@ -9,7 +9,7 @@ const ELIM_CSV = path.join(__dirname, "..", "Elim klanten volledig.csv");
 const V2_CSV = path.join(__dirname, "..", "v2.csv");
 const SALONWARE_CSV = path.join(__dirname, "..", "salonware-download (2).csv");
 const OUT = path.join(__dirname, "..", "salon-seed.json");
-const SEED_VERSION = 5;
+const SEED_VERSION = 6;
 const TODAY = new Date().toISOString().slice(0, 10);
 const T_REF = "t130";
 const P_REF = "p020";
@@ -105,6 +105,23 @@ function dateTimeParts(s) {
   const hh = m[2] != null ? String(m[2]).padStart(2, "0") : "";
   const mm = m[3] != null ? String(m[3]).padStart(2, "0") : "";
   return { date: m[1], time: hh && mm ? `${hh}:${mm}` : "" };
+}
+
+function dateTimeToMinutes(s) {
+  const t = String(s || "").trim();
+  const m = t.match(/(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+/** Behandelduur uit duur_minuten, anders vantijd→tottijd, anders 30 min. */
+function treatmentDurationMins(row, H) {
+  const dm = parseInt(r(row, H, "duur_minuten") || "0", 10) || 0;
+  if (dm > 1) return dm;
+  const a = dateTimeToMinutes(r(row, H, "vantijd"));
+  const b = dateTimeToMinutes(r(row, H, "tottijd"));
+  if (a != null && b != null && b > a) return b - a;
+  return 30;
 }
 
 function isTreatmentLine(row, H) {
@@ -286,7 +303,7 @@ for (const order of orders.values()) {
     const price = parseMoney(r(row, vH, "regelprijs")) || parseMoney(r(row, vH, "stukprijs"));
     const qty = Math.max(1, parseInt(r(row, vH, "aantal") || "1", 10) || 1);
     const kind = isTreatmentLine(row, vH) ? "treatment" : "product";
-    items.push({
+    const item = {
       kind,
       refId: kind === "product" ? P_REF : T_REF,
       savedName: label,
@@ -294,7 +311,9 @@ for (const order of orders.values()) {
       qty,
       price,
       category: r(row, vH, "naam"),
-    });
+    };
+    if (kind === "treatment") item.duration = treatmentDurationMins(row, vH);
+    items.push(item);
   }
   if (!items.length) continue;
 

@@ -6,7 +6,7 @@
 console.log('%c[Salon Beheer] salon-app.js v27 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
 const APP_VERSION = 'v27';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
-const SALON_SEED_VERSION = '5';
+const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
 /** v10: instellingen, klanten, diensten (zonder afspraken). */
 const STORAGE_KEY = 'salon-data-v10';
@@ -711,12 +711,19 @@ function describeItem(it) {
 function appointmentSummary(a) {
   return (a.items || []).map(it => `${it.qty} × ${describeItem(it)}`).join(', ');
 }
+/** Minuten per behandeling-regel (import-duur, catalogus, anders 30 min). */
+function treatmentItemDurationMins(it) {
+  if (!it || it.kind !== 'treatment') return 0;
+  const qty = it.qty || 1;
+  const stored = Number(it.duration);
+  if (stored > 1) return stored * qty;
+  const cat = findTreatment(it.refId)?.duration;
+  if (cat > 1) return cat * qty;
+  return 30 * qty;
+}
 /** Totale minuten (alleen behandelingen) op de afspraak. */
 function appointmentDurationMins(a) {
-  return (a.items || []).reduce((s, it) => {
-    if (it.kind === 'treatment') return s + (findTreatment(it.refId)?.duration || 0) * (it.qty || 1);
-    return s;
-  }, 0);
+  return (a.items || []).reduce((s, it) => s + treatmentItemDurationMins(it), 0);
 }
 function timeToMinutes(t) {
   if (!t || typeof t !== 'string') return 0;
@@ -974,7 +981,7 @@ function renderHome() {
     return sum + (a.items || []).reduce((s, it) => {
       if (it.kind !== 'treatment') return s;
       const t = findTreatment(it.refId);
-      return s + (t?.duration || 0) * (it.qty || 1);
+      return s + treatmentItemDurationMins(it);
     }, 0);
   }, 0);
   const occ = dayMinutes ? (totalMin / (dayMinutes * seats)) * 100 : 0;
@@ -1150,7 +1157,7 @@ function openAppointmentModal(existing) {
     // Genereer behandelingenrijen met Van/Tot/Duur
     let cursor = working.time;
     const rows = (working.items||[]).map((it, idx) => {
-      const dur = it.kind==='treatment' ? (findTreatment(it.refId)?.duration||0)*(it.qty||1) : 0;
+      const dur = treatmentItemDurationMins(it);
       const start = cursor;
       if (dur) {
         const [h,m] = cursor.split(':').map(Number);
@@ -2735,7 +2742,7 @@ function renderAppointmentDetail() {
   let cursor = a.time;
   const rows = (a.items || []).map((it, idx) => {
     const name = describeItem(it);
-    const dur = it.kind === 'treatment' ? (findTreatment(it.refId)?.duration || 0) * (it.qty || 1) : 0;
+    const dur = treatmentItemDurationMins(it);
     const start = cursor;
     if (dur) {
       const [h, m] = cursor.split(':').map(Number);
