@@ -6,7 +6,7 @@
 console.log('%c[Salon Beheer] salon-app.js v27 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
 const APP_VERSION = 'v27';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
-const SALON_SEED_VERSION = '4';
+const SALON_SEED_VERSION = '5';
 const SALON_SEED_KEY = 'salon-seed-version';
 /** v10: negeer v9 (o.a. CSV-upload bij file:// bleef in localStorage hangen). */
 const STORAGE_KEY = 'salon-data-v10';
@@ -2290,7 +2290,19 @@ function importClientsCsv(text) {
 }
 
 /** Salonware-export in de projectmap — alleen in te lezen via http(s); bij file:/// moet je handmatig importeren of een lokale server gebruiken. */
+/** Klanten + notities (Elim export). */
+const ELIM_BUNDLED_FILENAME = 'Elim klanten volledig.csv';
+/** Omzet/eerste-laatste kolommen (Salonware samenvatting). */
 const SALONWARE_BUNDLED_FILENAME = 'salonware-download (2).csv';
+/** Orders: echte datums, tijden, behandelingen, producten, bedragen. */
+const V2_ORDERS_FILENAME = 'v2.csv';
+
+function fetchBundledElimCsvText() {
+  return fetch(encodeURI(ELIM_BUNDLED_FILENAME), { cache: 'no-store' }).then(res => {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.text();
+  });
+}
 
 function fetchBundledSalonwareCsvText() {
   return fetch(encodeURI(SALONWARE_BUNDLED_FILENAME), { cache: 'no-store' }).then(res => {
@@ -2300,7 +2312,7 @@ function fetchBundledSalonwareCsvText() {
 }
 
 function fetchBundledSalonwareCsvAndImport() {
-  return fetchBundledSalonwareCsvText().then(text => importClientsCsv(text));
+  return fetchBundledElimCsvText().then(text => importClientsCsv(text));
 }
 
 function fetchAfsprakenKlantenCsvText() {
@@ -2350,7 +2362,7 @@ function updateSalonwareBundledChrome() {
     if (toolbar) sec.insertBefore(bar, toolbar);
     else sec.prepend(bar);
   }
-  const fn = SALONWARE_BUNDLED_FILENAME;
+  const fn = ELIM_BUNDLED_FILENAME;
   const isFile = location.protocol === 'file:';
   bar.className = 'card salonware-bundled-bar';
   if (isFile) {
@@ -2384,28 +2396,48 @@ function updateSalonwareBundledChrome() {
 function tryImportBundledSalonwareCsv() {
   if ((DB.clients || []).length > 0) return Promise.resolve();
   if (location.protocol === 'file:') return Promise.resolve();
-  return fetchBundledSalonwareCsvText()
+  return fetchBundledElimCsvText()
     .then(text => {
       if (!text || text.length < 80) throw new Error('Te kort');
       importClientsCsv(text);
     })
     .catch(e => {
-      console.warn('[Salon] Auto-import Salonware CSV:', e && e.message);
+      console.warn('[Salon] Auto-import Elim CSV:', e && e.message);
     });
 }
 
-/** Na seed of bij elke start: volledige notities + omzet/datums uit Salonware-CSV bijwerken. */
-function tryMergeBundledSalonwareCsv() {
+/** Na seed: volledige Elim-notities + klantgegevens bijwerken. */
+function tryMergeBundledElimCsv() {
   if (location.protocol === 'file:') return Promise.resolve(null);
-  return fetchBundledSalonwareCsvText()
+  return fetchBundledElimCsvText()
     .then(text => {
       if (!text || text.length < 80) throw new Error('Te kort');
       return mergeSalonwareClientsFromCsvText(text, { quiet: true });
     })
     .catch(e => {
-      console.warn('[Salon] Salonware CSV merge:', e && e.message);
+      console.warn('[Salon] Elim CSV merge:', e && e.message);
       return null;
     });
+}
+
+/** Salonware omzet / eerste / laatste kolommen bijwerken. */
+function tryMergeBundledSalonwareStats() {
+  if (location.protocol === 'file:') return Promise.resolve(null);
+  return fetchBundledSalonwareCsvText()
+    .then(text => {
+      if (!text || text.length < 80) throw new Error('Te kort');
+      const n = mergeSalonwareStatsFromCsvText(text);
+      return { updated: n };
+    })
+    .catch(e => {
+      console.warn('[Salon] Salonware stats merge:', e && e.message);
+      return null;
+    });
+}
+
+/** @deprecated gebruik tryMergeBundledElimCsv */
+function tryMergeBundledSalonwareCsv() {
+  return tryMergeBundledElimCsv();
 }
 
 /**
@@ -3881,7 +3913,7 @@ function periodFilterCardHTML(rep) {
   const f = reportFilters[rep];
   const yearOpts = [];
   const curY = new Date().getFullYear();
-  for (let y=curY+1; y>=2018; y--) yearOpts.push(`<option value="${y}" ${y===f.year?'selected':''}>${y}</option>`);
+  for (let y = curY + 1; y >= 2013; y--) yearOpts.push(`<option value="${y}" ${y===f.year?'selected':''}>${y}</option>`);
   const monthOpts = NL_MONTHS.map((m,i)=>`<option value="${i}" ${i===f.month?'selected':''}>${m}</option>`).join('');
   const quarterOpts = ['1e Kwartaal','2e Kwartaal','3e Kwartaal','4e Kwartaal'].map((q,i)=>`<option value="${i}" ${i===f.quarter?'selected':''}>${q}</option>`).join('');
   const titles = { bestedingen:'Bestedingen', omzetcategorie:'Omzet per categorie', omzetdienst:'Omzet per dienst of product' };
@@ -4538,8 +4570,8 @@ function renderDataPanel() {
     <div class="card">
       <div class="card-title">Data &amp; backup</div>
       <div class="card-body">
-        <p>Alle data wordt <strong>lokaal in je browser</strong> opgeslagen (localStorage). Dat werkt op GitHub Pages — je kunt gewoon nieuwe afspraken boeken; die blijven bewaard op deze computer/tablet in deze browser.</p>
-        <p style="color:var(--muted); font-size:13px; max-width:42rem; margin:0 0 10px 0;">GitHub host alleen de website, geen database. Voor backup: download regelmatig een JSON-backup. Op een andere computer: backup importeren. Voor sync tussen meerdere apparaten is later een cloud-database nodig (bijv. Supabase).</p>
+        <p>Alle data wordt <strong>lokaal in je browser</strong> opgeslagen (localStorage). GitHub Pages host alleen de website — dat is geen online database. Je kunt wel alles online <strong>bekijken</strong> via de site; nieuwe afspraken die je maakt blijven op dit apparaat in deze browser.</p>
+        <p style="color:var(--muted); font-size:13px; max-width:46rem; margin:0 0 10px 0;">Bij eerste bezoek laadt de site automatisch je Elim-klanten en v2-orders (behandelingen + producten + tijden). Maak regelmatig een <strong>JSON-backup</strong>. Voor dezelfde data op telefoon én laptop is later een cloud-database nodig (Hostinger/Supabase) — dat is een aparte stap.</p>
         <label class="ck-row" style="display:flex; align-items:flex-start; gap:8px; margin-bottom:12px; cursor:pointer;">
           <input type="checkbox" id="burcuAkcayDemo" style="margin-top:2px" ${DB.burcuAkcayDemo ? 'checked' : ''} />
           <span>Testklant Burcu (demo) — klant + afspraken uit bestand inladen</span>
@@ -4604,8 +4636,8 @@ function renderDataPanel() {
     renderClients('');
     showToast('Data gewist — klanten worden opnieuw geladen…');
     void bootstrapSalonFromHostedSeed().then(async () => {
-      await tryMergeBundledSalonwareCsv();
-      await tryImportBundledAfsprakenKlantenCsv();
+      await tryMergeBundledElimCsv();
+      await tryMergeBundledSalonwareStats();
       renderClients($('#searchClient')?.value || '');
       renderAgenda();
       renderHome();
@@ -4911,7 +4943,7 @@ function renderKlantdossier() {
         <div class="card dossier-stats-card">
           <div class="card-title">Bezoeken & omzet (Salonware)</div>
           <div class="card-body">
-            <p class="dossier-stats-hint">Eerste en laatste behandeling komen uit je Salonware-export. In de agenda staan alleen bezoeken waar <strong>datum én bedrag</strong> in de notities staan — geen verzonnen afspraken meer.</p>
+            <p class="dossier-stats-hint">Bezoeken komen uit <strong>v2.csv</strong> (Elim orders): echte datums, tijden, behandelingen en producten met bedragen. Omzet per jaar: menu <strong>Rapportage → Bestedingen</strong> (kies jaarbereik).</p>
             <div class="dossier-stats-grid">
               <div><span>Eerste behandeling</span><strong>${escapeHtml(eersteStr)}</strong></div>
               <div><span>Laatste behandeling</span><strong>${escapeHtml(laatsteStr)}</strong></div>
@@ -4928,7 +4960,7 @@ function renderKlantdossier() {
             </div>
             <div class="dossier-stats-actions">
               <button type="button" class="btn ghost small" id="dossierSalonwareStatsMerge">Salonware-CSV opnieuw laden…</button>
-              ${typeof location !== 'undefined' && location.protocol !== 'file:' ? `<button type="button" class="btn ghost small" id="dossierSalonwareBundledMerge">Notities bijwerken uit ${escapeHtml(SALONWARE_BUNDLED_FILENAME)}</button>` : ''}
+              ${typeof location !== 'undefined' && location.protocol !== 'file:' ? `<button type="button" class="btn ghost small" id="dossierSalonwareBundledMerge">Notities bijwerken uit ${escapeHtml(ELIM_BUNDLED_FILENAME)}</button>` : ''}
             </div>
             <p class="dossier-stats-filehelp">Notities worden automatisch geladen vanaf GitHub. Bij problemen: <strong>Klanten → CSV importeren</strong> en kies <code>salonware-download (2).csv</code>.</p>
           </div>
@@ -5104,7 +5136,7 @@ function renderKlantdossier() {
   $('#dossierSalonwareBundledMerge')?.addEventListener('click', () => {
     if (typeof location !== 'undefined' && location.protocol === 'file:') return;
     showToast('Bezig met bijwerken…');
-    fetchBundledSalonwareCsvText()
+    fetchBundledElimCsvText()
       .then((t) => {
         const res = mergeSalonwareClientsFromCsvText(t, { quiet: true });
         if (res.updated || res.added) {
@@ -6240,14 +6272,14 @@ document.addEventListener('DOMContentLoaded', () => {
   showView('home');
 
   void bootstrapSalonFromHostedSeed().then(async seeded => {
-    const merged = await tryMergeBundledSalonwareCsv();
+    const elim = await tryMergeBundledElimCsv();
+    const stats = await tryMergeBundledSalonwareStats();
     if (!seeded && (DB.clients || []).length === 0) {
       await tryImportBundledSalonwareCsv();
     }
-    await tryImportBundledAfsprakenKlantenCsv();
-    if (seeded || merged) {
-      const bits = [`${DB.clients.length} klanten`, `${DB.appointments.length} afspraken`];
-      if (merged && (merged.updated || merged.added)) bits.push(`${merged.updated} notities bijgewerkt`);
+    if (seeded || elim || stats) {
+      const bits = [`${DB.clients.length} klanten`, `${DB.appointments.length} afspraken (v2/ Elim)`];
+      if (elim && (elim.updated || elim.added)) bits.push(`${elim.updated} notities bijgewerkt`);
       showToast(bits.join(' · '));
     }
     try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
