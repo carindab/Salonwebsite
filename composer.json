@@ -1,0 +1,7 @@
+{
+  "name": "carinda/salonwebsite",
+  "description": "Salon Beheer Elim Instituut — PHP + static frontend voor Hostinger",
+  "type": "project",
+  "license": "proprietary",
+  "require": {}
+}

@@ -2,24 +2,61 @@
 
 Deze handleiding zet je salon-app op Hostinger met een **MySQL-database**. Daarna werken telefoon en computer met **dezelfde klanten en afspraken**.
 
+## GitHub koppelen (belangrijk)
+
+Repository: **https://github.com/carindab/Salonwebsite**
+
+### Fout: "Niet-ondersteund framework of ongeldige projectstructuur"
+
+Je ziet deze melding als je **Node.js Web App → Import Git** gebruikt zonder build-instellingen. Kies één van deze twee manieren:
+
+#### Optie A — Aanbevolen: PHP-website + Git (geen Node.js)
+
+1. hPanel → **Websites** → voeg een **gewone PHP/HTML-website** toe (niet "Node.js Web App")
+2. Klik **Beheren** bij die website
+3. Sidebar → **Geavanceerd → Git** (of zoek "Git")
+4. **Deploy from GitHub** → kies repo **carindab/Salonwebsite**
+5. Branch: **main**
+6. Root directory: **public_html** (standaard)
+7. Klik **Deploy**
+
+Geen build-commando nodig — Hostinger ziet `composer.json`, `index.php` en de `api/`-map.
+
+#### Optie B — Node.js Web App met build
+
+Als je per se via "Node.js Web App" wilt deployen:
+
+| Instelling | Waarde |
+|------------|--------|
+| Framework | **Other** |
+| Build command | `npm run build` |
+| Output directory | **dist** |
+
+Daarna opnieuw **Deploy** klikken.
+
+---
+
 ## Wat je nodig hebt
 
 - Hostinger-webhosting met **MySQL** (zit in de meeste pakketten)
 - Je domein (bijv. `eliminstituut.nl` of een subdomein)
-- FTP of Hostinger **Bestandsbeheer**
+- GitHub-repo gekoppeld (zie boven) **of** FTP / Bestandsbeheer
 
 ---
 
-## Stap 1 — Bestanden uploaden
+## Stap 1 — Bestanden op Hostinger
 
-Upload **alle bestanden** uit deze map naar `public_html` (of je subdomein-map):
+Via **Git deploy** (optie A) gebeurt dit automatisch bij elke push naar `main`.
 
-- `index.html`, `salon-app.js`, `styles.css`
+Handmatig uploaden naar `public_html`:
+
+- `index.html`, `index.php`, `salon-app.js`, `styles.css`
 - `salon-seed.json` (klanten + afspraken)
 - map `api/` (met alle `.php`-bestanden)
 - map `database/` (schema.sql)
+- `.htaccess`
 
-**Niet uploaden:** CSV-bestanden met klantgegevens (die staan al in `salon-seed.json`). Die hoef je niet publiek online te zetten.
+**Niet uploaden:** CSV-bestanden met klantgegevens (die staan al in `salon-seed.json`).
 
 ---
 
@@ -134,6 +171,7 @@ Verwacht:
 
 | Probleem | Oplossing |
 |----------|-----------|
+| **Niet-ondersteund framework** | Gebruik Git onder PHP-website (optie A), of Node.js met `npm run build` + output `dist` |
 | `config.php ontbreekt` | Kopieer config.example.php → config.php |
 | `Unauthorized` | API-sleutel in app ≠ SALON_API_KEY in config.php |
 | Database-fout | Controleer DB-naam, user, wachtwoord in hPanel |

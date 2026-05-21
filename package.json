@@ -1,0 +1,10 @@
+{
+  "name": "salonwebsite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Elim Instituut salon beheer — static build voor Hostinger Git deploy",
+  "scripts": {
+    "build": "node scripts/build-hostinger.cjs",
+    "start": "node scripts/build-hostinger.cjs && npx --yes serve dist -p 3000"
+  }
+}

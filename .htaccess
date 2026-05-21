@@ -1,0 +1,15 @@
+DirectoryIndex index.html index.php
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^api/config\.php$ - [F,L]
+</IfModule>
+
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+</IfModule>
+
+# Grote seed — gzip indien beschikbaar
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE application/json text/javascript text/css text/html
+</IfModule>
