@@ -2,23 +2,11 @@
 
 declare(strict_types=1);
 
-function salon_find_config_file(): ?string
-{
-    $candidates = [
-        __DIR__ . '/config.php',
-        dirname(__DIR__) . '/salon-config.php',
-    ];
-    foreach ($candidates as $file) {
-        if (is_file($file)) {
-            return $file;
-        }
-    }
-    return null;
-}
+require_once __DIR__ . '/config-store.php';
 
 function salon_config_missing_response(): void
 {
-    $setup = '/api/setup.php?key=tijdelijk-installatie-wachtwoord';
+    $setup = salon_setup_url();
     $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
     if (str_contains($accept, 'text/html') && !str_contains($_SERVER['SCRIPT_NAME'] ?? '', 'bootstrap.php')) {
         header('Content-Type: text/html; charset=utf-8');
@@ -26,9 +14,9 @@ function salon_config_missing_response(): void
         echo '<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             . '<title>Setup vereist</title></head><body style="font-family:system-ui,sans-serif;background:#eef5f0;min-height:100vh;display:grid;place-items:center;padding:16px">'
             . '<div style="background:#fff;padding:28px;border-radius:14px;max-width:480px">'
-            . '<h1 style="color:#2d5a3d">Agenda instellen</h1>'
-            . '<p>Database is nog niet gekoppeld (config.php ontbreekt — vaak na Git redeploy).</p>'
-            . '<p><a href="' . htmlspecialchars($setup) . '" style="display:inline-block;padding:12px 20px;background:#5fa463;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">→ Alles in één keer instellen</a></p>'
+            . '<h1 style="color:#2d5a3d">Database opnieuw koppelen</h1>'
+            . '<p>De koppeling met MySQL is weg na een update (Git redeploy). <strong>Je klanten en afspraken staan nog in de database</strong> — vul alleen je MySQL-gegevens opnieuw in.</p>'
+            . '<p><a href="' . htmlspecialchars($setup) . '" style="display:inline-block;padding:12px 20px;background:#5fa463;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">→ Opnieuw koppelen</a></p>'
             . '</div></body></html>';
         exit;
     }
@@ -36,8 +24,9 @@ function salon_config_missing_response(): void
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode([
         'ok' => false,
-        'error' => 'config.php ontbreekt — open /api/setup.php',
+        'error' => 'Database-koppeling ontbreekt na update — klik opnieuw koppelen',
         'setupUrl' => $setup,
+        'configMissing' => true,
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }

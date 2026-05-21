@@ -468,12 +468,25 @@ function hideLoginGate() {
   $('#appRoot')?.classList.remove('hidden');
 }
 
+function showConfigMissingOnLogin(setupUrl) {
+  const err = $('#loginError');
+  if (!err) return;
+  const url = setupUrl || '/api/setup.php?key=tijdelijk-installatie-wachtwoord';
+  err.innerHTML = 'Database-koppeling verloren na update. <a href="' + escapeHtml(url) + '" style="color:#a73f34;font-weight:600">Klik hier om opnieuw te koppelen</a> — klanten blijven bewaard.';
+  err.classList.remove('hidden');
+}
+
 async function checkAuthSession() {
   const base = getSalonApiBase();
   if (!base) return { ok: true, local: true };
   try {
     const res = await salonApiFetch(`${base}/auth.php?action=me`, { cache: 'no-store' });
     const data = await res.json().catch(() => ({}));
+    if (data.configMissing || (data.error && /koppeling|config/i.test(data.error))) {
+      showLoginGate();
+      showConfigMissingOnLogin(data.setupUrl);
+      return { ok: false, configMissing: true };
+    }
     if (data.ok && data.user) {
       authUser = data.user;
       return { ok: true, user: data.user };
@@ -497,6 +510,10 @@ async function loginWithPassword(email, password, remember) {
   });
   const data = await res.json().catch(() => ({}));
   if (!data.ok) {
+    if (data.configMissing || (data.error && /koppeling|config/i.test(data.error || ''))) {
+      showConfigMissingOnLogin(data.setupUrl);
+      return false;
+    }
     const err = $('#loginError');
     if (err) {
       err.textContent = data.error || 'Inloggen mislukt';

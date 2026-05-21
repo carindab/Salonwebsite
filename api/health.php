@@ -19,7 +19,7 @@ try {
         'auth' => $loggedIn,
         'revision' => salon_get_revision($pdo),
         'counts' => $counts,
-        'configured' => is_file(__DIR__ . '/config.php'),
+        'configured' => salon_find_config_file() !== null,
     ]);
 } catch (Throwable $e) {
     salon_json_out([

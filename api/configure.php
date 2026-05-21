@@ -5,17 +5,19 @@
  */
 declare(strict_types=1);
 
+require_once __DIR__ . '/config-store.php';
+
 $defaultInstallKey = 'tijdelijk-installatie-wachtwoord';
 $key = (string) ($_GET['key'] ?? $_POST['key'] ?? '');
 $fix = isset($_GET['fix']) || isset($_POST['fix']);
-$configPath = __DIR__ . '/config.php';
+$configPath = salon_find_config_file();
 
 if ($key === '' || !hash_equals($defaultInstallKey, $key)) {
     http_response_code(403);
     exit('Unauthorized — gebruik: /api/configure.php?key=tijdelijk-installatie-wachtwoord');
 }
 
-if (is_file($configPath) && !$fix) {
+if ($configPath !== null && !$fix) {
     header('Location: setup-user.php?key=' . urlencode($key));
     exit;
 }
@@ -23,7 +25,7 @@ if (is_file($configPath) && !$fix) {
 $error = '';
 $prefill = ['db_name' => '', 'db_user' => ''];
 
-if (is_file($configPath)) {
+if ($configPath !== null) {
     require_once $configPath;
     $prefill['db_name'] = defined('DB_NAME') ? DB_NAME : '';
     $prefill['db_user'] = defined('DB_USER') ? DB_USER : '';
@@ -43,11 +45,6 @@ function configure_test_pdo(string $host, string $name, string $user, string $pa
     } catch (PDOException $e) {
         return $e->getMessage();
     }
-}
-
-function configure_read_existing_api_key(): string
-{
-    return defined('SALON_API_KEY') && SALON_API_KEY !== '' ? SALON_API_KEY : bin2hex(random_bytes(24));
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -72,32 +69,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = 'Wachtwoord of gebruikersnaam klopt niet. In Hostinger: Databases → MySQL → controleer MySQL-gebruiker en wachtwoord (of reset wachtwoord).';
             }
         } else {
-            $apiKey = configure_read_existing_api_key();
-            $apiKeyEsc = addslashes($apiKey);
-            $dbNameEsc = addslashes($dbName);
-            $dbUserEsc = addslashes($dbUser);
-            $dbPassEsc = addslashes($dbPass);
+            $apiKey = salon_read_existing_api_key();
+            $php = salon_build_config_php($dbName, $dbUser, $dbPass, $apiKey);
 
-            $php = <<<PHP
-<?php
-define('DB_HOST', 'localhost');
-define('DB_NAME', '{$dbNameEsc}');
-define('DB_USER', '{$dbUserEsc}');
-define('DB_PASS', '{$dbPassEsc}');
-define('SALON_API_KEY', '{$apiKeyEsc}');
-define('SALON_INSTALL_KEY', 'tijdelijk-installatie-wachtwoord');
-if (basename(\$_SERVER['SCRIPT_FILENAME'] ?? '') === basename(__FILE__)) {
-    http_response_code(403);
-    exit('Forbidden');
-}
-
-PHP;
-
-            if (@file_put_contents($configPath, $php) === false && @file_put_contents(dirname(__DIR__) . '/salon-config.php', $php) === false) {
-                $error = 'Kon config.php niet schrijven.';
+            if (!salon_write_config($php)) {
+                $error = 'Kon config niet schrijven.';
             } else {
-                @chmod($configPath, 0600);
-                @chmod(dirname(__DIR__) . '/salon-config.php', 0600);
                 header('Location: setup.php?key=' . urlencode($defaultInstallKey));
                 exit;
             }

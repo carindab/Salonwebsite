@@ -5,22 +5,14 @@
  */
 declare(strict_types=1);
 
+require_once __DIR__ . '/config-store.php';
+
 $installKey = 'tijdelijk-installatie-wachtwoord';
 $key = (string) ($_GET['key'] ?? $_POST['key'] ?? '');
 
 if ($key === '' || !hash_equals($installKey, $key)) {
     http_response_code(403);
     exit('Unauthorized');
-}
-
-function setup_find_config(): ?string
-{
-    foreach ([__DIR__ . '/config.php', dirname(__DIR__) . '/salon-config.php'] as $file) {
-        if (is_file($file)) {
-            return $file;
-        }
-    }
-    return null;
 }
 
 function setup_html(string $title, string $body): void
@@ -43,38 +35,7 @@ function setup_html(string $title, string $body): void
 
 function setup_save_config(string $dbName, string $dbUser, string $dbPass, string $apiKey): bool
 {
-    $dbNameEsc = addslashes($dbName);
-    $dbUserEsc = addslashes($dbUser);
-    $dbPassEsc = addslashes($dbPass);
-    $apiKeyEsc = addslashes($apiKey);
-
-    $php = <<<PHP
-<?php
-define('DB_HOST', 'localhost');
-define('DB_NAME', '{$dbNameEsc}');
-define('DB_USER', '{$dbUserEsc}');
-define('DB_PASS', '{$dbPassEsc}');
-define('SALON_API_KEY', '{$apiKeyEsc}');
-define('SALON_INSTALL_KEY', 'tijdelijk-installatie-wachtwoord');
-if (basename(\$_SERVER['SCRIPT_FILENAME'] ?? '') === basename(__FILE__)) {
-    http_response_code(403);
-    exit('Forbidden');
-}
-
-PHP;
-
-    $paths = [
-        __DIR__ . '/config.php',
-        dirname(__DIR__) . '/salon-config.php',
-    ];
-    $ok = false;
-    foreach ($paths as $path) {
-        if (@file_put_contents($path, $php) !== false) {
-            @chmod($path, 0600);
-            $ok = true;
-        }
-    }
-    return $ok;
+    return salon_write_config(salon_build_config_php($dbName, $dbUser, $dbPass, $apiKey));
 }
 
 function setup_test_pdo(string $dbName, string $dbUser, string $dbPass): ?string
@@ -127,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         setup_html('Setup', '<p class="err">' . $msg . '</p>' . setup_form($key, $dbName, $dbUser));
     }
 
-    if (!setup_save_config($dbName, $dbUser, $dbPass, bin2hex(random_bytes(24)))) {
+    if (!setup_save_config($dbName, $dbUser, $dbPass, salon_read_existing_api_key())) {
         setup_html('Setup', '<p class="err">Kon config niet opslaan. Controleer schrijfrechten op de server.</p>');
     }
 
@@ -163,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // --- GET: status ---
-$configExists = setup_find_config() !== null;
+$configExists = salon_find_config_file() !== null;
 
 if ($configExists) {
     require_once __DIR__ . '/bootstrap.php';
@@ -201,9 +162,9 @@ if ($configExists) {
 }
 
 setup_html(
-    'Agenda instellen',
-    '<p class="note">Eén pagina: database koppelen + alle klanten laden.</p>'
-    . '<p>Heb je al een database in Hostinger? Vul hieronder de gegevens in.</p>'
+    'Database opnieuw koppelen',
+    '<p class="note">Na een website-update moet de MySQL-koppeling soms opnieuw. <strong>Je klanten en afspraken blijven bewaard</strong> in Hostinger.</p>'
+    . '<p>Vul je database-gegevens opnieuw in (Hostinger hPanel → Databases → MySQL).</p>'
     . setup_form($key)
 );
 
