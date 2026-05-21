@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v29 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v29';
+console.log('%c[Salon Beheer] salon-app.js v30 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v30';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -1448,39 +1448,10 @@ function getAgendaSlotRange(weekDates, appsByDay, mode) {
     endMin: Math.min(AGENDA_GRID_END_MIN, Math.ceil(close / 5) * 5),
   };
 }
-function getAgendaMinHeightPx(contentH, scrollEl) {
-  if (scrollEl && scrollEl.clientHeight > 0) {
-    return Math.max(contentH, scrollEl.clientHeight);
-  }
-  if (typeof window === 'undefined') return contentH;
-  const reserve = window.innerWidth <= 900 ? 150 : 130;
-  return Math.max(contentH, window.innerHeight - reserve);
-}
-function syncAgendaFillHeight() {
-  const scrollEl = document.querySelector('.agenda-scroll');
-  if (!scrollEl) return;
-  const spx = getAgendaSlotPx();
-  const targetH = Math.max(scrollEl.clientHeight, getAgendaMinHeightPx(0, scrollEl));
-  document.querySelectorAll('.agenda-day-col').forEach(col => {
-    col.style.minHeight = `${targetH}px`;
-    const slotsEl = col.querySelector('.agenda-day-slots');
-    if (!slotsEl) return;
-    const slotCount = slotsEl.querySelectorAll('.agenda-slot').length;
-    const contentH = slotCount * spx;
-    const fillerH = Math.max(0, targetH - contentH);
-    let filler = slotsEl.querySelector('.agenda-slot-filler');
-    if (fillerH > 0) {
-      if (!filler) {
-        filler = document.createElement('div');
-        filler.className = 'agenda-slot-filler';
-        filler.setAttribute('aria-hidden', 'true');
-        slotsEl.appendChild(filler);
-      }
-      filler.style.height = `${fillerH}px`;
-    } else if (filler) {
-      filler.remove();
-    }
-  });
+function getAgendaViewportMinPx() {
+  if (typeof window === 'undefined') return 600;
+  const reserve = window.innerWidth <= 900 ? 148 : 132;
+  return Math.max(480, window.innerHeight - reserve);
 }
 function updateAgendaViewToggle() {
   const mode = getAgendaViewMode();
@@ -1488,16 +1459,9 @@ function updateAgendaViewToggle() {
     btn.classList.toggle('active', btn.dataset.agendaView === mode);
   });
 }
-function isAgendaSlotBookable(dateISO, slot, forKopie = false) {
-  if (forKopie || pendingKopieDraft) return true;
-  return isAgendaSlotWorkTime(dateISO, slot);
-}
-function agendaSlotInnerHtml(dateISO, slot, workSlot) {
-  const bookable = isAgendaSlotBookable(dateISO, slot, !!pendingKopieDraft);
-  if (pendingKopieDraft && bookable) {
-    return `<span class="agenda-place-hint"><span class="agenda-place-time">${slot}</span> Plaats hier</span><span class="agenda-cell-time" aria-hidden="true">${slot}</span>`;
-  }
-  return `<span class="agenda-cell-time" aria-hidden="true">${slot}</span>`;
+function agendaSlotInnerHtml(dateISO, slot) {
+  const label = pendingKopieDraft ? `${slot} Plaats hier` : slot;
+  return `<span class="agenda-cell-time" data-label="${escapeHtml(label)}">${slot}</span>`;
 }
 function getAgendaSlotPx() {
   if (typeof window === 'undefined') return AGENDA_SLOT_PX_DESKTOP;
@@ -1579,14 +1543,14 @@ function renderAgenda() {
   };
   const spx = getAgendaSlotPx();
   const baseH = slots.length * spx;
-  const minColH = getAgendaMinHeightPx(baseH);
+  const minColH = Math.max(baseH, getAgendaViewportMinPx());
   const cols = weekDates.map(d => {
     const work = isWorkWeek(d);
     const apps = appsByDay[d] || [];
     const slotEls = slots.map(slot => {
       const workSlot = isAgendaSlotWorkTime(d, slot);
       const cls = workSlot ? 'agenda-slot' : 'agenda-slot agenda-slot--closed';
-      return `<div class="${cls}" data-date="${d}" data-slot="${slot}">${agendaSlotInnerHtml(d, slot, workSlot)}</div>`;
+      return `<div class="${cls}" data-date="${d}" data-slot="${slot}">${agendaSlotInnerHtml(d, slot)}</div>`;
     }).join('');
     const fillerH = Math.max(0, minColH - baseH);
     const filler = fillerH > 0 ? `<div class="agenda-slot-filler" style="height:${fillerH}px" aria-hidden="true"></div>` : '';
@@ -1601,6 +1565,9 @@ function renderAgenda() {
     return `<div class="agenda-day-col${!work ? ' free-day-col' : ''}" data-date="${d}" style="min-height:${minColH}px"><div class="agenda-day-slots">${slotEls}${filler}</div><div class="agenda-day-apps">${blocks}</div></div>`;
   }).join('');
   tbody.innerHTML = '<div class="agenda-cols" role="presentation">' + cols + '</div>';
+  if (tbody.parentElement) {
+    tbody.parentElement.style.minHeight = `${minColH + 44}px`;
+  }
 
   const scrollEl = document.querySelector('.agenda-scroll');
   const cardEl = document.querySelector('.agenda-week-card');
@@ -1609,7 +1576,6 @@ function renderAgenda() {
 
   requestAnimationFrame(() => {
     if (!scrollEl) return;
-    syncAgendaFillHeight();
     if (viewMode === 'compact') {
       scrollEl.scrollTop = 0;
       return;
@@ -4487,7 +4453,7 @@ function openKopieModal(id) {
   ].join('');
   openModal('Kopie inplannen', `
     <div class="form kopie-inplan" style="grid-template-columns:1fr;">
-      <p class="kopie-intro">Kies hoeveel weken later. U gaat daarna naar de agenda en kiest <strong>zelf</strong> dag en tijd — er wordt nog niets geboekt.</p>
+      <p class="kopie-intro">Kies hoeveel weken later — u gaat meteen naar de agenda om zelf een tijd te kiezen.</p>
       <p style="font-size:13px; color:var(--muted); margin:0 0 12px;">Alleen behandelingen worden meegenomen (geen producten).</p>
       <ul class="kopie-trt-list">
         ${treatments.map(it => `<li>${escapeHtml(describeItem(it))}</li>`).join('')}
@@ -4498,20 +4464,16 @@ function openKopieModal(id) {
           ${weekOptions}
         </select>
       </div>
-      <div class="kopie-actions">
+      <div class="kopie-actions kopie-actions--single">
         <button type="button" class="btn ghost" id="cancelKopie">Annuleren</button>
-        <button type="button" class="btn primary" id="kopieGoAgenda">Bekijk agenda &amp; kies tijd</button>
       </div>
     </div>
   `);
   $('#modalBox')?.classList.add('kopie-modal');
   $('#cancelKopie').addEventListener('click', closeModal);
-  $('#kopieWekenSelect')?.addEventListener('change', (e) => {
-    e.stopPropagation();
-  });
-  $('#kopieGoAgenda').addEventListener('click', () => {
+  $('#kopieWekenSelect')?.addEventListener('change', () => {
     const v = $('#kopieWekenSelect')?.value;
-    if (!v) { showToast('Kies eerst een week'); return; }
+    if (!v) return;
     startKopiePlacing(a, v);
   });
 }
