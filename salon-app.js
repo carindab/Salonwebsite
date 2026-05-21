@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v28 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v28';
+console.log('%c[Salon Beheer] salon-app.js v29 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v29';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -1448,10 +1448,39 @@ function getAgendaSlotRange(weekDates, appsByDay, mode) {
     endMin: Math.min(AGENDA_GRID_END_MIN, Math.ceil(close / 5) * 5),
   };
 }
-function getAgendaMinHeightPx(contentH) {
+function getAgendaMinHeightPx(contentH, scrollEl) {
+  if (scrollEl && scrollEl.clientHeight > 0) {
+    return Math.max(contentH, scrollEl.clientHeight);
+  }
   if (typeof window === 'undefined') return contentH;
-  const reserve = window.innerWidth <= 900 ? 210 : 190;
+  const reserve = window.innerWidth <= 900 ? 150 : 130;
   return Math.max(contentH, window.innerHeight - reserve);
+}
+function syncAgendaFillHeight() {
+  const scrollEl = document.querySelector('.agenda-scroll');
+  if (!scrollEl) return;
+  const spx = getAgendaSlotPx();
+  const targetH = Math.max(scrollEl.clientHeight, getAgendaMinHeightPx(0, scrollEl));
+  document.querySelectorAll('.agenda-day-col').forEach(col => {
+    col.style.minHeight = `${targetH}px`;
+    const slotsEl = col.querySelector('.agenda-day-slots');
+    if (!slotsEl) return;
+    const slotCount = slotsEl.querySelectorAll('.agenda-slot').length;
+    const contentH = slotCount * spx;
+    const fillerH = Math.max(0, targetH - contentH);
+    let filler = slotsEl.querySelector('.agenda-slot-filler');
+    if (fillerH > 0) {
+      if (!filler) {
+        filler = document.createElement('div');
+        filler.className = 'agenda-slot-filler';
+        filler.setAttribute('aria-hidden', 'true');
+        slotsEl.appendChild(filler);
+      }
+      filler.style.height = `${fillerH}px`;
+    } else if (filler) {
+      filler.remove();
+    }
+  });
 }
 function updateAgendaViewToggle() {
   const mode = getAgendaViewMode();
@@ -1459,9 +1488,14 @@ function updateAgendaViewToggle() {
     btn.classList.toggle('active', btn.dataset.agendaView === mode);
   });
 }
+function isAgendaSlotBookable(dateISO, slot, forKopie = false) {
+  if (forKopie || pendingKopieDraft) return true;
+  return isAgendaSlotWorkTime(dateISO, slot);
+}
 function agendaSlotInnerHtml(dateISO, slot, workSlot) {
-  if (pendingKopieDraft && workSlot) {
-    return `<span class="agenda-place-hint"><span class="agenda-place-time">${slot}</span> Plaats hier</span>`;
+  const bookable = isAgendaSlotBookable(dateISO, slot, !!pendingKopieDraft);
+  if (pendingKopieDraft && bookable) {
+    return `<span class="agenda-place-hint"><span class="agenda-place-time">${slot}</span> Plaats hier</span><span class="agenda-cell-time" aria-hidden="true">${slot}</span>`;
   }
   return `<span class="agenda-cell-time" aria-hidden="true">${slot}</span>`;
 }
@@ -1575,6 +1609,7 @@ function renderAgenda() {
 
   requestAnimationFrame(() => {
     if (!scrollEl) return;
+    syncAgendaFillHeight();
     if (viewMode === 'compact') {
       scrollEl.scrollTop = 0;
       return;
@@ -1595,7 +1630,7 @@ function renderAgenda() {
   }
   if (pendingKopieDraft) {
     const c = findClient(pendingKopieDraft.clientId);
-    hint.innerHTML = `<p><strong>Kopie plaatsen</strong> voor ${escapeHtml(clientFullName(c))}: klik op een <strong>leeg tijdvak</strong> in de agenda. <button type="button" class="btn ghost small" id="cancelKopiePlacing">Annuleren</button></p>`;
+    hint.innerHTML = `<p><strong>Kopie plaatsen</strong> voor ${escapeHtml(clientFullName(c))}: klik op een <strong>tijdvak</strong> (elke dag, ook grijs/vrij). <button type="button" class="btn ghost small" id="cancelKopiePlacing">Annuleren</button></p>`;
     hint.style.display = 'block';
     hint.classList.add('agenda-kopie-hint');
     document.getElementById('cancelKopiePlacing')?.addEventListener('click', () => {
@@ -6745,10 +6780,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (pendingKopieDraft) {
         const date = cell.dataset.date || agendaCurrentDate;
         const time = cell.dataset.slot || '10:00';
-        if (!isAgendaSlotWorkTime(date, time)) {
-          showToast('Kies een tijd binnen openingstijden');
-          return;
-        }
         const newApp = {
           id: uid('a'),
           date,
