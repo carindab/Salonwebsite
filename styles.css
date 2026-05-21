@@ -449,6 +449,12 @@ select.kopie-week-select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(176, 137, 102, 0.22);
 }
+.kopie-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
 .kopie-actions--single {
   margin-top: 18px;
   justify-content: flex-start;
@@ -802,7 +808,40 @@ body.client-drawer-open {
 .toast.hidden { display: none; }
 
 /* ---- Week Agenda ---- */
-.agenda-week-card { overflow: hidden; }
+.agenda-week-card { overflow: hidden; background: var(--bg); }
+.agenda-week-card .card-body.no-pad { background: var(--bg); }
+.agenda-view-toggle {
+  display: inline-flex;
+  border: 1px solid #e0d8d0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #efe9e1;
+}
+.agenda-view-btn {
+  border: 0;
+  background: transparent;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.agenda-view-btn:hover { background: rgba(255,255,255,0.45); }
+.agenda-view-btn.active {
+  background: #fff;
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.agenda-scroll.agenda-scroll--compact { max-height: none; overflow-y: visible; }
+.agenda-kopie-hint {
+  background: #fff8e6 !important;
+  border-color: #e8c96a !important;
+}
+body.kopie-placing .agenda-slot:not(.agenda-slot--closed) {
+  cursor: copy;
+  outline: 1px dashed rgba(138, 106, 74, 0.35);
+  outline-offset: -1px;
+}
 .agenda-empty-hint {
   margin: 0 0 10px 0;
   padding: 10px 14px;
@@ -819,7 +858,7 @@ body.client-drawer-open {
   min-width: 720px;
   width: 100%;
   border: 1px solid #e0d8d0;
-  background: #fffefd;
+  background: var(--bg);
   box-sizing: border-box;
 }
 .agenda-head-row {
@@ -863,7 +902,7 @@ body.client-drawer-open {
 .agenda-day-col {
   position: relative;
   border-left: 1px solid #e0d8d0;
-  background: #fffefd;
+  background: var(--bg);
   box-sizing: border-box;
   min-width: 0;
 }
@@ -888,8 +927,8 @@ body.client-drawer-open {
   box-sizing: border-box;
   min-height: 26px;
   height: 26px;
-  border-bottom: 1px solid #c9c0b4;
-  background: #fffefd;
+  border-bottom: 1px solid #ddd4c8;
+  background: var(--bg);
   cursor: pointer;
   position: relative;
   z-index: 0;
@@ -1101,6 +1140,16 @@ body.client-drawer-open {
 }
 
 /* Vaste hoogte per 5 min; afspraken over meerdere rijen – één uiterlijk voor alle afspraken */
+.app-block.app-block--marker {
+  background: #f5efe8;
+  border: 1px dashed #c4b5a5;
+  color: var(--text);
+  min-height: 36px !important;
+  height: auto !important;
+  max-height: 52px;
+}
+.app-block.app-block--marker .app-service { font-style: italic; }
+
 .app-block {
   position: absolute;
   left: 2px;
@@ -1579,7 +1628,9 @@ body.client-drawer-open {
 }
 .afr-item-row:hover { background: var(--accent); color: white; border-color: var(--accent); }
 .afr-item-row span:last-child { color: var(--muted); margin-left: 8px; white-space: nowrap; }
-.afr-item-row:hover span:last-child { color: white; }
+.afr-item-row .afr-item-meta { font-size: 11px; color: var(--muted); margin-left: 8px; white-space: nowrap; }
+.afr-item-row:hover span:last-child,
+.afr-item-row:hover .afr-item-meta { color: white; }
 
 .bon-client-bar {
   display: flex;

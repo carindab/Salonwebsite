@@ -1381,8 +1381,62 @@ function renderHome() {
    AGENDA – weekweergave
    ========================================================= */
 let agendaCurrentDate = todayISO();
+/** Wacht op klik in agenda na “Kopie inplannen” (week gekozen, tijd nog niet). */
+let pendingKopieDraft = null;
+const AGENDA_GRID_START_MIN = 8 * 60;
+const AGENDA_GRID_END_MIN = 22 * 60;
 /** Rij-hoogte in de week-agenda (5 min); op smal scherm lager zodat de hele week horizontaal past. */
 const AGENDA_SLOT_PX_DESKTOP = 26;
+
+function getAgendaViewMode() {
+  try {
+    return localStorage.getItem('salon-agenda-view') === 'full' ? 'full' : 'compact';
+  } catch {
+    return 'compact';
+  }
+}
+function setAgendaViewMode(mode) {
+  try { localStorage.setItem('salon-agenda-view', mode === 'full' ? 'full' : 'compact'); } catch { /* ignore */ }
+}
+function minutesToAgendaTime(m) {
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+function buildAgendaSlots(startMin, endMin) {
+  const s = Math.max(AGENDA_GRID_START_MIN, Math.floor(startMin / 5) * 5);
+  const e = Math.min(AGENDA_GRID_END_MIN, Math.ceil(endMin / 5) * 5);
+  const slots = [];
+  for (let t = s; t < e; t += 5) slots.push(minutesToAgendaTime(t));
+  return slots.length ? slots : [minutesToAgendaTime(s)];
+}
+/** Blok-afspraken (vakantie/pinksteren): niet als hele witte kolom tekenen. */
+function isAgendaBlockAppointment(a) {
+  return (appointmentDurationMins(a) || 0) >= 240;
+}
+function agendaVisualDurationMins(a, dateISO) {
+  const raw = appointmentDurationMins(a) || 30;
+  const start = timeToMinutes(a.time);
+  const close = timeToMinutes(DB.settings.closeTime || '18:00');
+  const untilClose = Math.max(5, close - start);
+  if (isAgendaBlockAppointment(a)) return Math.min(40, untilClose);
+  return Math.min(raw, untilClose);
+}
+function getAgendaSlotRange(weekDates, appsByDay, mode) {
+  if (mode === 'full') return { startMin: AGENDA_GRID_START_MIN, endMin: AGENDA_GRID_END_MIN };
+  const open = timeToMinutes(DB.settings.openTime || '08:30');
+  const close = timeToMinutes(DB.settings.closeTime || '18:00');
+  return {
+    startMin: Math.max(AGENDA_GRID_START_MIN, Math.floor(open / 5) * 5),
+    endMin: Math.min(AGENDA_GRID_END_MIN, Math.ceil(close / 5) * 5),
+  };
+}
+function updateAgendaViewToggle() {
+  const mode = getAgendaViewMode();
+  document.querySelectorAll('.agenda-view-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.agendaView === mode);
+  });
+}
 function getAgendaSlotPx() {
   if (typeof window === 'undefined') return AGENDA_SLOT_PX_DESKTOP;
   return window.innerWidth <= 900 ? 15 : AGENDA_SLOT_PX_DESKTOP;
@@ -1411,6 +1465,8 @@ function fmtDayHeader(iso) {
 
 function renderAgenda() {
   const weekDates = getWeekDates(agendaCurrentDate);
+  const viewMode = getAgendaViewMode();
+  updateAgendaViewToggle();
   $('#agendaDate').value = agendaCurrentDate;
 
   const weekNr = getWeekNumber(parseLocalYMD(agendaCurrentDate));
@@ -1421,15 +1477,15 @@ function renderAgenda() {
 
   const todayStr = todayLocalISO();
 
-  /* Vaste dag-grid 08:00–22:00 (5 min). Buiten openingstijden = grijs (class agenda-slot--closed). */
-  const GRID_START_MIN = 8 * 60;
-  const GRID_END_MIN   = 22 * 60;
-  const slots = [];
-  for (let t = GRID_START_MIN; t < GRID_END_MIN; t += 5) {
-    const h = Math.floor(t / 60);
-    const m = t % 60;
-    slots.push(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`);
-  }
+  const appsByDay = {};
+  weekDates.forEach(d => {
+    appsByDay[d] = DB.appointments
+      .filter(a => a.date === d && a.status !== 'geannuleerd' && a.status !== 'verwijderd')
+      .sort((a,b) => a.time.localeCompare(b.time));
+  });
+
+  const { startMin, endMin } = getAgendaSlotRange(weekDates, appsByDay, viewMode);
+  const slots = buildAgendaSlots(startMin, endMin);
 
   // Kolomkoppen: alleen dagen
   const thead = $('#agendaThead');
@@ -1442,24 +1498,17 @@ function renderAgenda() {
       </div>`;
   }).join('');
 
-  // Verzamel afspraken per dag
-  const appsByDay = {};
-  weekDates.forEach(d => {
-    appsByDay[d] = DB.appointments
-      .filter(a => a.date === d && a.status !== 'geannuleerd' && a.status !== 'verwijderd')
-      .sort((a,b) => a.time.localeCompare(b.time));
-  });
-
   // Kolommen met vaste 5-min rijen; afspraken als overlay (kruist niet met andere dagen)
   const tbody = $('#agendaTbody');
   const cellTime = (slot) => `<span class="agenda-cell-time" aria-hidden="true">${slot}</span>`;
   const appBlock = (a, topPx, heightPx) => {
     const c = findClient(a.clientId);
     const durMins = appointmentDurationMins(a);
-    return `<div class="app-block" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;min-height:0;height:${heightPx}px">
+    const marker = isAgendaBlockAppointment(a);
+    return `<div class="app-block${marker ? ' app-block--marker' : ''}" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;min-height:0;height:${heightPx}px">
           <div class="app-name">${escapeHtml(clientFullName(c))}</div>
           <div class="app-service">${escapeHtml(appointmentSummary(a))}</div>
-          ${durMins ? `<div class="app-dur">${durMins} min</div>` : ''}
+          ${durMins && !marker ? `<div class="app-dur">${durMins} min</div>` : ''}
           <div class="app-actions">
             ${a.status==='gepland' ? `<button class="app-btn complete" data-complete="${a.id}" title="Afronden">✓</button>` : ''}
             ${a.status==='afgerond'&&!a.paid ? `<button class="app-btn paid" data-mark-paid="${a.id}" title="Betaald">€</button>` : ''}
@@ -1479,20 +1528,31 @@ function renderAgenda() {
     }).join('');
     const blocks = apps.map((a) => {
       const idx = slotIndexForTime(a.time, slots);
-      const span = Math.max(1, Math.ceil((appointmentDurationMins(a) || 5) / 5));
+      const visDur = agendaVisualDurationMins(a, d);
+      const span = Math.max(1, Math.ceil(visDur / 5));
       const h = span * spx;
       const top = idx * spx;
       return appBlock(a, top, h);
     }).join('');
-    let maxH = baseH;
-    apps.forEach((a) => {
-      const idx = slotIndexForTime(a.time, slots);
-      const span = Math.max(1, Math.ceil((appointmentDurationMins(a) || 5) / 5));
-      maxH = Math.max(maxH, (idx + span) * spx);
-    });
-    return `<div class="agenda-day-col${!work ? ' free-day-col' : ''}" data-date="${d}" style="min-height:${maxH}px"><div class="agenda-day-slots">${slotEls}</div><div class="agenda-day-apps">${blocks}</div></div>`;
+    return `<div class="agenda-day-col${!work ? ' free-day-col' : ''}" data-date="${d}" style="min-height:${baseH}px"><div class="agenda-day-slots">${slotEls}</div><div class="agenda-day-apps">${blocks}</div></div>`;
   }).join('');
   tbody.innerHTML = '<div class="agenda-cols" role="presentation">' + cols + '</div>';
+
+  const scrollEl = document.querySelector('.agenda-scroll');
+  const cardEl = document.querySelector('.agenda-week-card');
+  if (scrollEl) scrollEl.classList.toggle('agenda-scroll--compact', viewMode === 'compact');
+  if (cardEl) cardEl.classList.toggle('agenda-compact', viewMode === 'compact');
+
+  requestAnimationFrame(() => {
+    if (!scrollEl) return;
+    if (viewMode === 'compact') {
+      scrollEl.scrollTop = 0;
+      return;
+    }
+    const openMin = timeToMinutes(DB.settings.openTime || '08:30');
+    const idx = slots.findIndex(s => timeToMinutes(s) >= openMin);
+    scrollEl.scrollTop = idx > 0 ? Math.max(0, (idx - 2) * spx) : 0;
+  });
 
   const weekTotal = weekDates.reduce((n, d) => n + (appsByDay[d]?.length || 0), 0);
   const allTotal = (DB.appointments || []).filter(a => a.status !== 'geannuleerd' && a.status !== 'verwijderd').length;
@@ -1503,15 +1563,30 @@ function renderAgenda() {
     hint.className = 'agenda-empty-hint';
     tbody.parentElement?.insertBefore(hint, tbody);
   }
-  if (weekTotal === 0 && allTotal > 0) {
+  if (pendingKopieDraft) {
+    const c = findClient(pendingKopieDraft.clientId);
+    hint.innerHTML = `<p><strong>Kopie plaatsen</strong> voor ${escapeHtml(clientFullName(c))}: klik op een <strong>leeg tijdvak</strong> in de agenda. <button type="button" class="btn ghost small" id="cancelKopiePlacing">Annuleren</button></p>`;
+    hint.style.display = 'block';
+    hint.classList.add('agenda-kopie-hint');
+    document.getElementById('cancelKopiePlacing')?.addEventListener('click', () => {
+      pendingKopieDraft = null;
+      document.body.classList.remove('kopie-placing');
+      renderAgenda();
+      showToast('Kopie geannuleerd');
+    });
+  } else if (weekTotal === 0 && allTotal > 0) {
+    hint.classList.remove('agenda-kopie-hint');
     hint.innerHTML = `<p>Geen afspraken in deze week. Er staan <strong>${allTotal}</strong> afspraken in totaal (meestal historie). Gebruik <strong>◀ Vorige week</strong> of klik op een leeg tijdvak om een <strong>nieuwe afspraak</strong> te maken.</p>`;
     hint.style.display = 'block';
   } else if (allTotal === 0) {
-    hint.innerHTML = `<p>Agenda is leeg. Wacht tot klanten geladen zijn, of maak een nieuwe afspraak via <strong>+ Afspraak</strong> of klik in het rooster. Data wordt opgeslagen in deze browser.</p>`;
+    hint.classList.remove('agenda-kopie-hint');
+    hint.innerHTML = `<p>Agenda is leeg. Wacht tot klanten geladen zijn, of maak een nieuwe afspraak via <strong>+ Afspraak</strong> of klik in het rooster.</p>`;
     hint.style.display = 'block';
   } else {
+    hint.classList.remove('agenda-kopie-hint');
     hint.style.display = 'none';
   }
+  document.body.classList.toggle('kopie-placing', !!pendingKopieDraft);
 }
 
 function openAppointmentModal(existing) {
@@ -3769,9 +3844,109 @@ function renderFactuurPage() {
    AFREKENEN / BON  (volwaardige pagina, geen modal)
    ========================================================= */
 let currentAfrId = null;
-let currentAfrCat = 'vandaag';   // welke categorie geselecteerd in linker lijst
+let currentAfrCat = 'diensten';
 let currentAfrKorting = 0;
 let currentAfrBetaalwijze = '';
+
+function searchAfrCatalog(q) {
+  const ql = q.trim().toLowerCase();
+  if (!ql) return [];
+  const results = [];
+  DB.treatments.forEach(t => {
+    if (t.name.toLowerCase().includes(ql) || (t.category || '').toLowerCase().includes(ql)) {
+      results.push({ add: `t:${t.id}`, label: t.name, sub: t.category || 'Dienst', price: t.price });
+    }
+  });
+  (DB.products || []).forEach(p => {
+    if (p.name.toLowerCase().includes(ql) || (p.category || '').toLowerCase().includes(ql)) {
+      results.push({ add: `p:${p.id}`, label: p.name, sub: p.category || 'Product', price: p.price });
+    }
+  });
+  (DB.packages || []).forEach(pkg => {
+    if (pkg.name.toLowerCase().includes(ql)) {
+      results.push({ add: `pkg:${pkg.id}`, label: pkg.name, sub: 'Pakket', price: pkg.price });
+    }
+  });
+  return results.sort((a, b) => a.label.localeCompare(b.label, 'nl'));
+}
+
+function buildAfrVerkoopHtml(cat) {
+  if (cat === 'diensten') {
+    return DB.treatmentCategories.map(c => {
+      const treatments = DB.treatments.filter(t => t.category === c);
+      if (!treatments.length) return '';
+      return `<div class="afr-cat-block">
+        <div class="afr-cat-title">${escapeHtml(c)}</div>
+        ${treatments.map(t => `<button class="afr-item-row" data-add="t:${t.id}">
+          <span>${escapeHtml(t.name)}</span><span>${fmtMoney(t.price)}</span>
+        </button>`).join('')}
+      </div>`;
+    }).join('') || '<div class="empty" style="padding:24px;">Geen diensten gevonden.</div>';
+  }
+  if (cat === 'aanvullend') {
+    const aanvulCats = ['Overige behandelingen', 'Aanvullende diensten'];
+    const ts = DB.treatments.filter(t => aanvulCats.includes(t.category));
+    return ts.length ? `<div class="afr-cat-block">
+      <div class="afr-cat-title">Aanvullende diensten</div>
+      ${ts.map(t => `<button class="afr-item-row" data-add="t:${t.id}">
+        <span>${escapeHtml(t.name)}</span><span>${fmtMoney(t.price)}</span>
+      </button>`).join('')}
+    </div>` : '<div class="empty" style="padding:24px;">Geen aanvullende diensten ingesteld.</div>';
+  }
+  if (cat === 'producten') {
+    return (DB.productCategories || []).map(c => {
+      const prods = DB.products.filter(p => p.category === c);
+      if (!prods.length) return '';
+      return `<div class="afr-cat-block">
+        <div class="afr-cat-title">${escapeHtml(c)}</div>
+        ${prods.map(p => `<button class="afr-item-row" data-add="p:${p.id}">
+          <span>${escapeHtml(p.name)}</span><span>${fmtMoney(p.price)}</span>
+        </button>`).join('')}
+      </div>`;
+    }).join('') || '<div class="empty" style="padding:24px;">Geen producten gevonden.</div>';
+  }
+  if (cat === 'pakketten') {
+    const pakketten = (DB.packages || []);
+    return pakketten.length ? `<div class="afr-cat-block">
+      <div class="afr-cat-title">Pakketten</div>
+      ${pakketten.map(p => `<button class="afr-item-row" data-add="pkg:${p.id}">
+        <span>${escapeHtml(p.name)}</span><span>${fmtMoney(p.price)}</span>
+      </button>`).join('')}</div>`
+      : `<div class="empty" style="padding:24px;">Nog geen pakketten ingesteld.<br><br><button class="btn ghost small" id="afrAddPakket">+ Pakket aanmaken</button></div>`;
+  }
+  if (cat === 'cadeaubon') {
+    return `<div style="padding:18px;">
+      <div class="afr-cat-title" style="margin-bottom:12px;">Cadeaubon verkopen</div>
+      <label style="display:block; margin-bottom:8px; font-size:13px; color:var(--muted);">Bedrag (€)</label>
+      <input type="number" id="cadeauBedrag" value="50" step="5" min="5" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; margin-bottom:12px;" />
+      <label style="display:block; margin-bottom:8px; font-size:13px; color:var(--muted);">Code (optioneel)</label>
+      <input type="text" id="cadeauCode" placeholder="Bijv. SALON-2026-XYZ" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; margin-bottom:12px;" />
+      <button class="btn primary" id="afrAddCadeau" style="width:100%;">+ Cadeaubon aan bon</button>
+    </div>`;
+  }
+  return '<div class="empty" style="padding:24px;">Selecteer een categorie.</div>';
+}
+
+function buildAfrSearchHtml(q) {
+  const results = searchAfrCatalog(q);
+  if (!results.length) {
+    return `<div class="empty" style="padding:24px;">Geen resultaten voor “${escapeHtml(q)}”. Probeer een andere spelling of kortere zoekterm.</div>`;
+  }
+  return `<div class="afr-cat-block">
+    <div class="afr-cat-title">Zoekresultaten (${results.length})</div>
+    ${results.map(r => `<button class="afr-item-row" data-add="${r.add}">
+      <span>${escapeHtml(r.label)}</span>
+      <span class="afr-item-meta">${escapeHtml(r.sub)} · ${fmtMoney(r.price)}</span>
+    </button>`).join('')}
+  </div>`;
+}
+
+function refreshAfrCatContent(searchQuery) {
+  const el = $('#afrCatContent');
+  if (!el) return;
+  const q = (searchQuery || '').trim();
+  el.innerHTML = q ? buildAfrSearchHtml(q) : buildAfrVerkoopHtml(currentAfrCat);
+}
 
 /* Betaalwijzen onder "Anders ▾" - alleen wat de salon écht gebruikt */
 const ANDERS_OPTIONS = [
@@ -3861,58 +4036,7 @@ function renderAfrekenen() {
     { key: 'cadeaubon',          label: 'Cadeaubon' },
   ];
 
-  // Wat tonen we rechts in het Verkoop-paneel?
-  let verkoopRight = '';
-  if (currentAfrCat === 'diensten') {
-    verkoopRight = DB.treatmentCategories.map(cat => {
-      const treatments = DB.treatments.filter(t => t.category === cat);
-      if (!treatments.length) return '';
-      return `<div class="afr-cat-block">
-        <div class="afr-cat-title">${escapeHtml(cat)}</div>
-        ${treatments.map(t => `<button class="afr-item-row" data-add="t:${t.id}">
-          <span>${escapeHtml(t.name)}</span><span>${fmtMoney(t.price)}</span>
-        </button>`).join('')}
-      </div>`;
-    }).join('') || '<div class="empty" style="padding:24px;">Geen diensten gevonden.</div>';
-  } else if (currentAfrCat === 'aanvullend') {
-    // Aanvullende diensten = behandelingen met categorie 'Overige behandelingen' of 'Aanvullende diensten'
-    const aanvulCats = ['Overige behandelingen','Aanvullende diensten'];
-    const ts = DB.treatments.filter(t => aanvulCats.includes(t.category));
-    verkoopRight = ts.length ? `<div class="afr-cat-block">
-      <div class="afr-cat-title">Aanvullende diensten</div>
-      ${ts.map(t => `<button class="afr-item-row" data-add="t:${t.id}">
-        <span>${escapeHtml(t.name)}</span><span>${fmtMoney(t.price)}</span>
-      </button>`).join('')}
-    </div>` : '<div class="empty" style="padding:24px;">Geen aanvullende diensten ingesteld.</div>';
-  } else if (currentAfrCat === 'producten') {
-    verkoopRight = (DB.productCategories||[]).map(cat => {
-      const prods = DB.products.filter(p => p.category === cat);
-      if (!prods.length) return '';
-      return `<div class="afr-cat-block">
-        <div class="afr-cat-title">${escapeHtml(cat)}</div>
-        ${prods.map(p => `<button class="afr-item-row" data-add="p:${p.id}">
-          <span>${escapeHtml(p.name)}</span><span>${fmtMoney(p.price)}</span>
-        </button>`).join('')}
-      </div>`;
-    }).join('') || '<div class="empty" style="padding:24px;">Geen producten gevonden.</div>';
-  } else if (currentAfrCat === 'pakketten') {
-    const pakketten = (DB.packages || []);
-    verkoopRight = pakketten.length ? `<div class="afr-cat-block">
-      <div class="afr-cat-title">Pakketten</div>
-      ${pakketten.map(p => `<button class="afr-item-row" data-add="pkg:${p.id}">
-        <span>${escapeHtml(p.name)}</span><span>${fmtMoney(p.price)}</span>
-      </button>`).join('')}
-    </div>` : `<div class="empty" style="padding:24px;">Nog geen pakketten ingesteld.<br><br><button class="btn ghost small" id="afrAddPakket">+ Pakket aanmaken</button></div>`;
-  } else if (currentAfrCat === 'cadeaubon') {
-    verkoopRight = `<div style="padding:18px;">
-      <div class="afr-cat-title" style="margin-bottom:12px;">Cadeaubon verkopen</div>
-      <label style="display:block; margin-bottom:8px; font-size:13px; color:var(--muted);">Bedrag (€)</label>
-      <input type="number" id="cadeauBedrag" value="50" step="5" min="5" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; margin-bottom:12px;" />
-      <label style="display:block; margin-bottom:8px; font-size:13px; color:var(--muted);">Code (optioneel)</label>
-      <input type="text" id="cadeauCode" placeholder="Bijv. SALON-2026-XYZ" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; margin-bottom:12px;" />
-      <button class="btn primary" id="afrAddCadeau" style="width:100%;">+ Cadeaubon aan bon</button>
-    </div>`;
-  }
+  const verkoopRight = buildAfrVerkoopHtml(currentAfrCat);
 
   $('#afrekenenContent').innerHTML = `
     <div class="afr-grid">
@@ -4039,38 +4163,55 @@ function renderAfrekenen() {
   // Linker categorie-links
   $$('.afr-cat-link').forEach(btn => btn.addEventListener('click', () => {
     currentAfrCat = btn.dataset.afrCat;
-    renderAfrekenen();
+    const searchEl = $('#afrSearch');
+    if (searchEl) searchEl.value = '';
+    refreshAfrCatContent('');
+    $$('.afr-cat-link').forEach(b => b.classList.toggle('active', b.dataset.afrCat === currentAfrCat));
   }));
 
-  // Item toevoegen vanuit Verkoop kolom (dienst, product, pakket)
-  $$('[data-add]').forEach(btn => btn.addEventListener('click', () => {
-    const [kind, refId] = btn.dataset.add.split(':');
+  // Zoekveld: doorzoek diensten én producten tegelijk
+  $('#afrSearch').addEventListener('input', e => {
+    refreshAfrCatContent(e.target.value);
+    bindAfrAddButtons();
+  });
+
+  function bindAfrAddButtons() {
+    $$('[data-add]', $('#afrCatContent')).forEach(btn => {
+      btn.addEventListener('click', () => addItemFromVerkoop(btn.dataset.add));
+    });
+  }
+
+  function addItemFromVerkoop(addKey) {
+    const [kind, refId] = addKey.split(':');
     let ref;
     if (kind === 't') ref = findTreatment(refId);
     else if (kind === 'p') ref = findProduct(refId);
-    else if (kind === 'pkg') ref = (DB.packages||[]).find(x => x.id === refId);
+    else ref = (DB.packages || []).find(p => p.id === refId);
     if (!ref) return;
-
     const newItem = {
-      kind: kind==='t' ? 'treatment' : (kind==='p' ? 'product' : 'package'),
-      refId,
+      kind: kind === 't' ? 'treatment' : (kind === 'p' ? 'product' : 'package'),
+      refId: ref.id,
       savedName: ref.name,
       qty: 1,
       price: ref.price,
-      addedAfterCheckout: isAfgerond,  // markeer als naderhand toegevoegd
+      addedAfterCheckout: isAfgerond,
     };
     a.items.push(newItem);
-
-    // Voor afgeronde afspraken: voorraad direct verminderen (anders pas bij afronden)
     if (isAfgerond && newItem.kind === 'product') {
       const p = findProduct(refId);
-      if (p) p.stock = Math.max(0, (p.stock||0) - 1);
+      if (p) p.stock = Math.max(0, (p.stock || 0) - 1);
     }
-
     saveData(DB);
     renderAfrekenen();
     if (isAfgerond) showToast(`${ref.name} bijgeboekt op afgeronde bon`);
-  }));
+    const searchEl = $('#afrSearch');
+    if (searchEl?.value.trim()) {
+      refreshAfrCatContent(searchEl.value);
+      bindAfrAddButtons();
+    }
+  }
+
+  bindAfrAddButtons();
 
   // Cadeaubon toevoegen
   $('#afrAddCadeau')?.addEventListener('click', () => {
@@ -4097,18 +4238,6 @@ function renderAfrekenen() {
     if (!DB.packages) DB.packages = [];
     DB.packages.push({ id: uid('pkg'), name: name.trim(), price });
     saveData(DB); renderAfrekenen();
-  });
-
-  // Zoekveld filter
-  $('#afrSearch').addEventListener('input', e => {
-    const q = e.target.value.trim().toLowerCase();
-    if (!q) {
-      $$('.afr-item-row', $('#afrCatContent')).forEach(row => row.style.display = '');
-      return;
-    }
-    $$('.afr-item-row', $('#afrCatContent')).forEach(row => {
-      row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
-    });
   });
 
   // Aantal/prijs aanpassen
@@ -4240,11 +4369,41 @@ function sendReminderForNewAppointment(apptId) {
 /* =========================================================
    KOPIE INPLANNEN
    ========================================================= */
+function getKopieTreatmentItems(a) {
+  return (a.items || []).filter(it => {
+    if (it.kind === 'product' || it.kind === 'cadeaubon') return false;
+    if (it.kind === 'treatment') return true;
+    if (it.refId && findTreatment(it.refId)) return true;
+    return !!(it.savedName && !(it.refId && findProduct(it.refId)));
+  });
+}
+function startKopiePlacing(sourceAppt, wekenStr) {
+  if (wekenStr === '' || wekenStr == null) return false;
+  const w = Number(wekenStr);
+  if (Number.isNaN(w) || w < 0) return false;
+  const treatments = getKopieTreatmentItems(sourceAppt);
+  if (!treatments.length) {
+    showToast('Geen behandelingen om te kopiëren (alleen producten op deze afspraak).');
+    return false;
+  }
+  const anchorDate = addWeeksToIsoDate(sourceAppt.date, w);
+  pendingKopieDraft = {
+    clientId: sourceAppt.clientId,
+    items: treatments.map(it => ({ ...it })),
+    notes: sourceAppt.notes || '',
+    anchorDate,
+  };
+  agendaCurrentDate = anchorDate;
+  closeModal();
+  showView('agenda');
+  renderAgenda();
+  showToast(`Klik op een tijdvak in de week van ${fmtDate(anchorDate)} om de kopie te plaatsen`);
+  return true;
+}
 function openKopieModal(id) {
   const a = DB.appointments.find(x => x.id === id);
   if (!a) return;
-  /** Alleen behandelingen — producten en overige regels nooit meenemen. */
-  const treatments = (a.items || []).filter(it => it.kind === 'treatment');
+  const treatments = getKopieTreatmentItems(a);
   if (!treatments.length) {
     showToast('Geen behandelingen om te kopiëren (alleen producten op deze afspraak).');
     return;
@@ -4260,32 +4419,9 @@ function openKopieModal(id) {
       return `<option value="${n}">${label}</option>`;
     })
   ].join('');
-  function commitKopie(wekenStr) {
-    if (wekenStr === '' || wekenStr == null) return;
-    const w = Number(wekenStr);
-    if (Number.isNaN(w) || w < 0) return;
-    const newDate = addWeeksToIsoDate(a.date, w);
-    const newTime = a.time;
-    const newApp = {
-      id: uid('a'),
-      date: newDate,
-      time: newTime,
-      clientId: a.clientId,
-      items: treatments.map(it => ({ ...it })),
-      status: 'gepland',
-      paid: false,
-      notes: a.notes || '',
-    };
-    DB.appointments.push(newApp);
-    saveData(DB);
-    agendaCurrentDate = newDate;
-    closeModal();
-    renderAgenda();
-    showToast(`Kopie ingepland op ${fmtDate(newDate)} ${newTime}`);
-  }
   openModal('Kopie inplannen', `
     <div class="form kopie-inplan" style="grid-template-columns:1fr;">
-      <p class="kopie-intro">Er wordt een kopie van de bestaande reservering gemaakt om deze op een ander tijdstip in te plannen. Wanneer wilt u deze kopie inplannen?</p>
+      <p class="kopie-intro">Er wordt een kopie van de bestaande reservering gemaakt. Kies een week — daarna gaat u naar de agenda om een tijdvak te kiezen.</p>
       <p style="font-size:13px; color:var(--muted); margin:0 0 12px;">Alleen behandelingen worden meegenomen (geen producten).</p>
       <ul class="kopie-trt-list">
         ${treatments.map(it => `<li>${escapeHtml(describeItem(it))}</li>`).join('')}
@@ -4296,17 +4432,18 @@ function openKopieModal(id) {
           ${weekOptions}
         </select>
       </div>
-      <div class="kopie-actions kopie-actions--single">
+      <div class="kopie-actions">
         <button type="button" class="btn ghost" id="cancelKopie">Annuleren</button>
+        <button type="button" class="btn primary" id="kopieGoAgenda">Ga naar agenda</button>
       </div>
     </div>
   `);
   $('#modalBox')?.classList.add('kopie-modal');
   $('#cancelKopie').addEventListener('click', closeModal);
-  $('#kopieWekenSelect')?.addEventListener('change', (e) => {
-    const v = e.target.value;
-    if (v === '') return;
-    commitKopie(v);
+  $('#kopieGoAgenda').addEventListener('click', () => {
+    const v = $('#kopieWekenSelect')?.value;
+    if (!v) { showToast('Kies eerst een week'); return; }
+    startKopiePlacing(a, v);
   });
 }
 
@@ -6556,6 +6693,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#todayBtn').addEventListener('click', () => { agendaCurrentDate = todayLocalISO(); renderAgenda(); });
   $('#newAppointment').addEventListener('click', () => openAppointmentModal(null));
+  document.querySelectorAll('.agenda-view-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setAgendaViewMode(btn.dataset.agendaView);
+      renderAgenda();
+    });
+  });
 
   // Klik op lege cel = nieuwe afspraak
   $('#agendaTbody').addEventListener('click', e => {
@@ -6565,6 +6708,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const cell = e.target.closest('.agenda-slot');
     if (cell) {
       agendaCurrentDate = cell.dataset.date || agendaCurrentDate;
+      if (pendingKopieDraft) {
+        const date = cell.dataset.date || agendaCurrentDate;
+        const time = cell.dataset.slot || '10:00';
+        const newApp = {
+          id: uid('a'),
+          date,
+          time,
+          clientId: pendingKopieDraft.clientId,
+          items: pendingKopieDraft.items.map(it => ({ ...it })),
+          status: 'gepland',
+          paid: false,
+          notes: pendingKopieDraft.notes || '',
+        };
+        DB.appointments.push(newApp);
+        saveData(DB);
+        pendingKopieDraft = null;
+        document.body.classList.remove('kopie-placing');
+        renderAgenda();
+        showToast(`Kopie geplaatst op ${fmtDate(date)} ${time}`);
+        openAppointmentModal(newApp);
+        return;
+      }
       openAppointmentModal({ id:'', date: cell.dataset.date||agendaCurrentDate, time: cell.dataset.slot||'10:00', clientId:'', items:[], status:'gepland', paid:false, notes:'' });
     }
   });
