@@ -1,4 +1,2 @@
-.DS_Store
-.env
-.env.*
-*.local
+# Config met wachtwoorden — nooit committen
+api/config.php

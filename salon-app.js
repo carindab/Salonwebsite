@@ -390,7 +390,239 @@ function safeSaveData(d, opts = {}) {
 
 function saveData(d) {
   safeSaveData(d, { quiet: false });
+  scheduleServerDatabaseSave();
 }
+
+/* ---------- Hostinger MySQL sync (PHP API) ---------- */
+const SALON_API_KEY_STORAGE = 'salon-api-key';
+const SALON_SERVER_REVISION_KEY = 'salon-server-revision';
+const SALON_SERVER_SYNC_PREF = 'salon-server-sync-enabled';
+
+const serverSync = {
+  enabled: false,
+  available: false,
+  saving: false,
+  saveTimer: null,
+  revision: Number(localStorage.getItem(SALON_SERVER_REVISION_KEY) || 0) || 0,
+  lastError: '',
+  lastSavedAt: '',
+  counts: { clients: 0, appointments: 0 },
+};
+
+function getSalonApiBase() {
+  if (location.protocol === 'file:') return '';
+  return `${location.origin}/api`;
+}
+
+function getSalonApiKey() {
+  return (localStorage.getItem(SALON_API_KEY_STORAGE) || '').trim();
+}
+
+function setSalonApiKey(key) {
+  const v = String(key || '').trim();
+  if (v) localStorage.setItem(SALON_API_KEY_STORAGE, v);
+  else localStorage.removeItem(SALON_API_KEY_STORAGE);
+}
+
+function isServerSyncPreferred() {
+  return localStorage.getItem(SALON_SERVER_SYNC_PREF) !== 'off';
+}
+
+function salonApiHeaders() {
+  const h = { Accept: 'application/json' };
+  const key = getSalonApiKey();
+  if (key) h['X-Salon-Key'] = key;
+  return h;
+}
+
+function applyServerPayload(payload) {
+  if (!payload || !payload.ok) return false;
+  const meta = payload.meta || {};
+  const metaKeys = [
+    'settings', 'messageTemplates', 'intakeQuestions', 'treatmentCategories', 'treatments',
+    'productCategories', 'products', 'packages', 'cadeaubonnen', 'autoFinalizeLog', 'burcuAkcayDemo',
+  ];
+  metaKeys.forEach(k => {
+    if (meta[k] !== undefined) DB[k] = meta[k];
+  });
+  if (Array.isArray(payload.clients)) DB.clients = payload.clients;
+  if (Array.isArray(payload.appointments)) DB.appointments = payload.appointments;
+  DB = applyDataDefaults(DB);
+  serverSync.revision = Number(payload.revision) || serverSync.revision;
+  localStorage.setItem(SALON_SERVER_REVISION_KEY, String(serverSync.revision));
+  serverSync.counts = payload.counts || {
+    clients: (DB.clients || []).length,
+    appointments: (DB.appointments || []).length,
+  };
+  safeSaveData(DB, { quiet: true });
+  return true;
+}
+
+function buildServerSavePayload() {
+  return {
+    revision: serverSync.revision,
+    settings: DB.settings,
+    messageTemplates: DB.messageTemplates,
+    intakeQuestions: DB.intakeQuestions,
+    treatmentCategories: DB.treatmentCategories,
+    treatments: DB.treatments,
+    productCategories: DB.productCategories,
+    products: DB.products,
+    packages: DB.packages || [],
+    cadeaubonnen: DB.cadeaubonnen || [],
+    autoFinalizeLog: DB.autoFinalizeLog || {},
+    burcuAkcayDemo: DB.burcuAkcayDemo,
+    clients: DB.clients || [],
+    appointments: DB.appointments || [],
+  };
+}
+
+async function checkServerDatabaseHealth() {
+  const base = getSalonApiBase();
+  if (!base) return { ok: false, error: 'Geen webserver' };
+  try {
+    const res = await fetch(`${base}/health.php`, { cache: 'no-store' });
+    const data = await res.json();
+    serverSync.available = !!data.ok;
+    if (data.counts) serverSync.counts = data.counts;
+    if (data.revision != null) serverSync.revision = Number(data.revision) || serverSync.revision;
+    return data;
+  } catch (e) {
+    serverSync.available = false;
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+async function loadDatabaseFromServer(opts = {}) {
+  const base = getSalonApiBase();
+  const key = getSalonApiKey();
+  if (!base) {
+    showToast('Open de site via je Hostinger-domein.');
+    return false;
+  }
+  if (!key) {
+    showToast('Vul eerst je API-sleutel in onder Instellingen → Data.');
+    return false;
+  }
+  try {
+    const res = await fetch(`${base}/load.php`, { headers: salonApiHeaders(), cache: 'no-store' });
+    const data = await res.json();
+    if (!data.ok) {
+      serverSync.lastError = data.error || 'Laden mislukt';
+      showToast('Database laden mislukt: ' + serverSync.lastError);
+      return false;
+    }
+    applyServerPayload(data);
+    serverSync.enabled = true;
+    serverSync.lastError = '';
+    localStorage.setItem(SALON_SERVER_SYNC_PREF, 'on');
+    if (!opts.quiet) {
+      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken uit database`);
+    }
+    return true;
+  } catch (e) {
+    serverSync.lastError = e.message || String(e);
+    if (!opts.quiet) showToast('Database laden mislukt: ' + serverSync.lastError);
+    return false;
+  }
+}
+
+async function saveDatabaseToServer(opts = {}) {
+  const base = getSalonApiBase();
+  const key = getSalonApiKey();
+  if (!base || !key || !serverSync.enabled) return false;
+  if (serverSync.saving) return false;
+
+  serverSync.saving = true;
+  try {
+    const res = await fetch(`${base}/save.php`, {
+      method: 'POST',
+      headers: { ...salonApiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildServerSavePayload()),
+    });
+    const data = await res.json();
+    if (res.status === 409) {
+      serverSync.lastError = data.message || 'Conflict — er is nieuwere data op de server';
+      if (!opts.quiet) showToast(serverSync.lastError);
+      return false;
+    }
+    if (!data.ok) {
+      serverSync.lastError = data.error || 'Opslaan mislukt';
+      if (!opts.quiet) showToast('Database opslaan mislukt: ' + serverSync.lastError);
+      return false;
+    }
+    serverSync.revision = Number(data.revision) || serverSync.revision;
+    localStorage.setItem(SALON_SERVER_REVISION_KEY, String(serverSync.revision));
+    serverSync.lastError = '';
+    serverSync.lastSavedAt = new Date().toLocaleString('nl-NL');
+    if (data.counts) serverSync.counts = data.counts;
+    return true;
+  } catch (e) {
+    serverSync.lastError = e.message || String(e);
+    if (!opts.quiet) showToast('Database opslaan mislukt: ' + serverSync.lastError);
+    return false;
+  } finally {
+    serverSync.saving = false;
+  }
+}
+
+function scheduleServerDatabaseSave() {
+  if (!serverSync.enabled || !getSalonApiKey()) return;
+  clearTimeout(serverSync.saveTimer);
+  serverSync.saveTimer = setTimeout(() => {
+    void saveDatabaseToServer({ quiet: true });
+  }, 2000);
+}
+
+async function importSeedToServerDatabase() {
+  const base = getSalonApiBase();
+  const key = getSalonApiKey();
+  if (!base || !key) {
+    showToast('API-sleutel vereist');
+    return false;
+  }
+  if (!confirm('Alle klanten en afspraken uit salon-seed.json naar MySQL importeren? Bestaande database-data wordt overschreven.')) {
+    return false;
+  }
+  try {
+    const res = await fetch(`${base}/seed-import.php`, {
+      method: 'POST',
+      headers: salonApiHeaders(),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      showToast('Seed-import mislukt: ' + (data.error || 'onbekend'));
+      return false;
+    }
+    await loadDatabaseFromServer({ quiet: true });
+    renderClients($('#searchClient')?.value || '');
+    renderAgenda();
+    renderHome();
+    showToast(`Database gevuld: ${data.counts?.clients || 0} klanten · ${data.counts?.appointments || 0} afspraken`);
+    return true;
+  } catch (e) {
+    showToast('Seed-import mislukt: ' + (e.message || e));
+    return false;
+  }
+}
+
+async function initServerDatabaseSync() {
+  if (location.protocol === 'file:' || !isServerSyncPreferred()) return false;
+  const health = await checkServerDatabaseHealth();
+  if (!health.ok) return false;
+
+  const key = getSalonApiKey();
+  if (!key) return false;
+
+  serverSync.enabled = true;
+  const loaded = await loadDatabaseFromServer({ quiet: true });
+  if (loaded && (DB.clients || []).length > 50) {
+    console.log('[Salon] MySQL sync actief:', serverSync.counts);
+    return true;
+  }
+  return loaded;
+}
+
 function migrateSettingsAnbos(s, def) {
   if (!s) return;
   if (!s.anbosNaam && !s.anbosKernlidNummer && s.anbosKernlid) {
@@ -2242,8 +2474,19 @@ function needsFullDataReload() {
 
 function reloadAllDataFromServer() {
   if (location.protocol === 'file:') {
-    showToast('Open de site via GitHub Pages om automatisch te laden.');
+    showToast('Open de site via je website-URL.');
     return Promise.resolve(false);
+  }
+  if (serverSync.available && getSalonApiKey()) {
+    showToast('Gegevens worden opnieuw geladen uit database…');
+    return loadDatabaseFromServer().then(ok => {
+      if (ok) {
+        renderClients($('#searchClient')?.value || '');
+        renderAgenda();
+        renderHome();
+      }
+      return ok;
+    });
   }
   localStorage.removeItem(SALON_SEED_KEY);
   showToast('Gegevens worden opnieuw geladen…');
@@ -4655,12 +4898,38 @@ function renderAlgemeen() {
 /* ---------- Data & backup ---------- */
 function renderDataPanel() {
   const el = $('#spanel-data');
+  const syncOn = serverSync.enabled && !!getSalonApiKey();
+  const syncStatus = syncOn
+    ? (serverSync.lastError
+      ? `<span style="color:#c0392b;">Fout: ${escapeHtml(serverSync.lastError)}</span>`
+      : `<span style="color:#2d7a3a;">✓ Verbonden met MySQL (${serverSync.counts.clients || 0} klanten · ${serverSync.counts.appointments || 0} afspraken)${serverSync.lastSavedAt ? ' · laatst opgeslagen ' + escapeHtml(serverSync.lastSavedAt) : ''}</span>`)
+    : (serverSync.available
+      ? '<span style="color:var(--muted);">MySQL API bereikbaar — vul API-sleutel in om te synchroniseren</span>'
+      : '<span style="color:var(--muted);">MySQL API niet bereikbaar (normaal op GitHub Pages; wel op Hostinger)</span>');
+
   el.innerHTML = `
+    <div class="card">
+      <div class="card-title">Database (Hostinger MySQL)</div>
+      <div class="card-body">
+        <p>Sla klanten en afspraken op in je <strong>Hostinger MySQL-database</strong>. Telefoon en computer gebruiken dan dezelfde data.</p>
+        <p style="font-size:13px; margin:0 0 10px 0;">${syncStatus}</p>
+        <div class="dos-row" style="margin-bottom:10px;">
+          <label>API-sleutel</label>
+          <input type="password" id="salonApiKey" value="${escapeHtml(getSalonApiKey())}" placeholder="Zelfde als SALON_API_KEY in api/config.php" autocomplete="off" />
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
+          <button class="btn primary" id="connectDatabase">🔗 Verbinden &amp; laden</button>
+          <button class="btn ghost" id="saveToDatabase">💾 Nu opslaan naar database</button>
+          <button class="btn ghost" id="importSeedDatabase">📥 Seed naar database importeren</button>
+        </div>
+        <p style="color:var(--muted); font-size:12px; max-width:46rem; margin:0;">Eerste keer op Hostinger: maak database aan → kopieer <code>api/config.example.php</code> naar <code>api/config.php</code> → bezoek <code>/api/install.php?key=...</code> → importeer seed. Zie HOSTINGER.md.</p>
+      </div>
+    </div>
     <div class="card">
       <div class="card-title">Data &amp; backup</div>
       <div class="card-body">
-        <p>Alle data wordt <strong>lokaal in je browser</strong> opgeslagen (localStorage). GitHub Pages host alleen de website — dat is geen online database. Je kunt wel alles online <strong>bekijken</strong> via de site; nieuwe afspraken die je maakt blijven op dit apparaat in deze browser.</p>
-        <p style="color:var(--muted); font-size:13px; max-width:46rem; margin:0 0 10px 0;">Bij eerste bezoek laadt de site automatisch je Elim-klanten en v2-orders (behandelingen + producten + tijden). Maak regelmatig een <strong>JSON-backup</strong>. Voor dezelfde data op telefoon én laptop is later een cloud-database nodig (Hostinger/Supabase) — dat is een aparte stap.</p>
+        <p>Data wordt ook <strong>lokaal in je browser</strong> gecached. Met MySQL-sync is de database op Hostinger leidend.</p>
+        <p style="color:var(--muted); font-size:13px; max-width:46rem; margin:0 0 10px 0;">Maak regelmatig een <strong>JSON-backup</strong>. Zonder MySQL laadt de site automatisch uit salon-seed.json (GitHub Pages).</p>
         <label class="ck-row" style="display:flex; align-items:flex-start; gap:8px; margin-bottom:12px; cursor:pointer;">
           <input type="checkbox" id="burcuAkcayDemo" style="margin-top:2px" ${DB.burcuAkcayDemo ? 'checked' : ''} />
           <span>Testklant Burcu (demo) — klant + afspraken uit bestand inladen</span>
@@ -4676,6 +4945,34 @@ function renderDataPanel() {
         </div>
       </div>
     </div>`;
+  $('#connectDatabase')?.addEventListener('click', async () => {
+    setSalonApiKey($('#salonApiKey')?.value || '');
+    localStorage.setItem(SALON_SERVER_SYNC_PREF, 'on');
+    await checkServerDatabaseHealth();
+    const ok = await loadDatabaseFromServer();
+    if (ok) {
+      serverSync.enabled = true;
+      renderClients($('#searchClient')?.value || '');
+      renderAgenda();
+      renderHome();
+      renderDataPanel();
+    }
+  });
+  $('#saveToDatabase')?.addEventListener('click', async () => {
+    setSalonApiKey($('#salonApiKey')?.value || '');
+    serverSync.enabled = true;
+    localStorage.setItem(SALON_SERVER_SYNC_PREF, 'on');
+    const ok = await saveDatabaseToServer();
+    if (ok) {
+      showToast('Opgeslagen in MySQL ✓');
+      renderDataPanel();
+    }
+  });
+  $('#importSeedDatabase')?.addEventListener('click', () => {
+    setSalonApiKey($('#salonApiKey')?.value || '');
+    serverSync.enabled = true;
+    void importSeedToServerDatabase().then(ok => { if (ok) renderDataPanel(); });
+  });
   $('#exportAll').addEventListener('click', () => downloadFile('salon-backup.json', JSON.stringify(DB,null,2), 'application/json'));
   $('#reloadFromServer')?.addEventListener('click', () => {
     if (!confirm('Alle klanten en afspraken opnieuw laden vanaf GitHub? Je wijzigingen sinds de laatste backup gaan verloren.')) return;
@@ -6366,7 +6663,16 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#brandName').textContent = DB.settings.salonName || 'Salon';
   showView('home');
 
-  void bootstrapSalonFromHostedSeed(needsFullDataReload()).then(async seeded => {
+  void initServerDatabaseSync().then(async synced => {
+    if (synced) {
+      try {
+        renderClients($('#searchClient')?.value || '');
+        renderAgenda();
+        renderHome();
+      } catch (e) { /* */ }
+      return;
+    }
+    return bootstrapSalonFromHostedSeed(needsFullDataReload()).then(async seeded => {
     const elim = await tryMergeBundledElimCsv();
     const stats = await tryMergeBundledSalonwareStats();
     if (!seeded && (DB.clients || []).length === 0) {
@@ -6387,6 +6693,7 @@ document.addEventListener('DOMContentLoaded', () => {
       renderAgenda();
       renderHome();
     } catch (e) { /* */ }
+    });
   });
 
   // ---- AUTO-AFBOEKEN OM 21:00 NL TIJD ----
