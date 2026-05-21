@@ -8,8 +8,10 @@ const APP_VERSION = 'v27';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '5';
 const SALON_SEED_KEY = 'salon-seed-version';
-/** v10: negeer v9 (o.a. CSV-upload bij file:// bleef in localStorage hangen). */
+/** v10: instellingen, klanten, diensten (zonder afspraken). */
 const STORAGE_KEY = 'salon-data-v10';
+/** Afspraken apart — voorkomt dat één mislukte save alles wist. */
+const APPOINTMENTS_STORAGE_KEY = 'salon-appointments-v1';
 
 /* ---------- Standaard / echte diensten-data ---------- */
 function defaultData() {
@@ -275,41 +277,119 @@ function defaultData() {
 }
 
 /* ---------- Opslag ---------- */
+function applyDataDefaults(parsed) {
+  const def = defaultData();
+  if (!parsed.treatmentCategories) parsed.treatmentCategories = def.treatmentCategories;
+  if (!parsed.treatments || !parsed.treatments.length || !parsed.treatments[0].category) {
+    parsed.treatments = def.treatments;
+    parsed.treatmentCategories = def.treatmentCategories;
+  }
+  if (!parsed.productCategories) parsed.productCategories = def.productCategories;
+  if (!parsed.products || !parsed.products.length || !parsed.products[0].category) {
+    parsed.products = def.products;
+    parsed.productCategories = def.productCategories;
+  }
+  migrateSettingsAnbos(parsed.settings, def);
+  if (parsed.settings) {
+    Object.keys(def.settings).forEach(k => {
+      if (parsed.settings[k] === undefined) parsed.settings[k] = def.settings[k];
+    });
+  }
+  if (!Array.isArray(parsed.clients)) parsed.clients = [];
+  if (!Array.isArray(parsed.appointments)) parsed.appointments = [];
+  if (!Array.isArray(parsed.cadeaubonnen)) parsed.cadeaubonnen = [];
+  if (!Array.isArray(parsed.packages)) parsed.packages = [];
+  if (!parsed.autoFinalizeLog || typeof parsed.autoFinalizeLog !== 'object') parsed.autoFinalizeLog = {};
+  if (parsed.burcuAkcayDemo === undefined) parsed.burcuAkcayDemo = def.burcuAkcayDemo;
+  return parsed;
+}
+
 function loadData() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      const def = defaultData();
-      if (!parsed.treatmentCategories) parsed.treatmentCategories = def.treatmentCategories;
-      if (!parsed.treatments || !parsed.treatments.length || !parsed.treatments[0].category) {
-        parsed.treatments = def.treatments;
-        parsed.treatmentCategories = def.treatmentCategories;
+      const parsed = applyDataDefaults(JSON.parse(raw));
+      const rawA = localStorage.getItem(APPOINTMENTS_STORAGE_KEY);
+      if (rawA) {
+        try {
+          const appts = JSON.parse(rawA);
+          if (Array.isArray(appts) && appts.length) parsed.appointments = appts;
+        } catch (e) { /* behoud embedded appointments */ }
       }
-      if (!parsed.productCategories) parsed.productCategories = def.productCategories;
-      if (!parsed.products || !parsed.products.length || !parsed.products[0].category) {
-        parsed.products = def.products;
-        parsed.productCategories = def.productCategories;
+      if (pruneBurcuDemoIfOff(parsed)) {
+        try { safeSaveData(parsed, { quiet: true }); } catch (e) { /* quota */ }
       }
-      migrateSettingsAnbos(parsed.settings, def);
-      if (parsed.settings) {
-        Object.keys(def.settings).forEach(k => {
-          if (parsed.settings[k] === undefined) parsed.settings[k] = def.settings[k];
-        });
-      }
-      if (!Array.isArray(parsed.clients)) parsed.clients = [];
-      if (!Array.isArray(parsed.appointments)) parsed.appointments = [];
-      if (!Array.isArray(parsed.cadeaubonnen)) parsed.cadeaubonnen = [];
-      if (!Array.isArray(parsed.packages)) parsed.packages = [];
-      if (!parsed.autoFinalizeLog || typeof parsed.autoFinalizeLog !== 'object') parsed.autoFinalizeLog = {};
-      if (parsed.burcuAkcayDemo === undefined) parsed.burcuAkcayDemo = def.burcuAkcayDemo;
-      if (pruneBurcuDemoIfOff(parsed)) saveData(parsed);
       return parsed;
     }
-  } catch (e) { /* val terug op default */ }
-  const fresh = defaultData();
-  saveData(fresh);
-  return fresh;
+  } catch (e) {
+    console.warn('[Salon] loadData mislukt — seed wordt opnieuw geladen:', e && e.message);
+  }
+  return applyDataDefaults(defaultData());
+}
+
+function isQuotaError(e) {
+  return e && (e.name === 'QuotaExceededError' || e.code === 22);
+}
+
+/** Slaat op in twee keys; trimt notities bij volle opslag. Gooit nooit onopvangen. */
+function safeSaveData(d, opts = {}) {
+  const quiet = !!opts.quiet;
+  const appts = Array.isArray(d.appointments) ? d.appointments : [];
+  const main = { ...d };
+  delete main.appointments;
+
+  function tryWrite(clients) {
+    const payload = { ...main, clients: clients || main.clients };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    localStorage.setItem(APPOINTMENTS_STORAGE_KEY, JSON.stringify(appts));
+  }
+
+  try {
+    tryWrite(main.clients);
+    return true;
+  } catch (e) {
+    if (!isQuotaError(e)) {
+      if (!quiet) showToast('Opslaan mislukt: ' + (e.message || e));
+      console.error(e);
+      return false;
+    }
+  }
+
+  const trimmed = (main.clients || []).map(c => ({
+    ...c,
+    notes: c.notes && c.notes.length > 500 ? c.notes.slice(0, 500) + '…' : c.notes,
+    notesInternal: c.notesInternal && c.notesInternal.length > 250 ? c.notesInternal.slice(0, 250) + '…' : c.notesInternal,
+  }));
+  try {
+    tryWrite(trimmed);
+    d.clients = trimmed;
+    if (!quiet) showToast('Let op: notities ingekort — browseropslag bijna vol.');
+    return true;
+  } catch (e2) {
+    if (!isQuotaError(e2)) return false;
+  }
+
+  const tiny = trimmed.map(c => ({
+    ...c,
+    notes: (c.notes || '').slice(0, 220),
+    notesInternal: (c.notesInternal || '').slice(0, 120),
+  }));
+  try {
+    tryWrite(tiny);
+    d.clients = tiny;
+    if (!quiet) showToast('Opslag vol — notities sterk ingekort. Maak een JSON-backup.');
+    return true;
+  } catch (e3) {
+    if (!quiet) {
+      showToast('Opslaan mislukt: te veel data voor deze browser. Klik “Gegevens opnieuw laden”.');
+    }
+    console.error('[Salon] safeSaveData quota:', e3);
+    return false;
+  }
+}
+
+function saveData(d) {
+  safeSaveData(d, { quiet: false });
 }
 function migrateSettingsAnbos(s, def) {
   if (!s) return;
@@ -352,8 +432,6 @@ function pruneBurcuDemoIfOff(db) {
   }
   return changed;
 }
-
-function saveData(d) { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); }
 
 let DB = loadData();
 
@@ -2146,31 +2224,35 @@ function importAppointmentsFromAfsprakenKlantenCsv(text, opts = {}) {
 }
 
 function saveDataWithImportQuotaFix() {
-  try {
-    saveData(DB);
-    return;
-  } catch (e) {
-    const q = e && (e.name === 'QuotaExceededError' || e.code === 22);
-    if (!q) throw e;
+  safeSaveData(DB, { quiet: false });
+}
+
+function needsFullDataReload() {
+  const nC = (DB.clients || []).length;
+  const nA = (DB.appointments || []).length;
+  return nC < 50 || nA < 500;
+}
+
+function reloadAllDataFromServer() {
+  if (location.protocol === 'file:') {
+    showToast('Open de site via GitHub Pages om automatisch te laden.');
+    return Promise.resolve(false);
   }
-  DB.clients.forEach(c => {
-    if (c.notes && c.notes.length > 500) c.notes = c.notes.slice(0, 500) + '…';
-    if (c.notesInternal && c.notesInternal.length > 250) c.notesInternal = c.notesInternal.slice(0, 250) + '…';
+  localStorage.removeItem(SALON_SEED_KEY);
+  showToast('Gegevens worden opnieuw geladen…');
+  return bootstrapSalonFromHostedSeed(true).then(async ok => {
+    if (ok) {
+      await tryMergeBundledElimCsv();
+      await tryMergeBundledSalonwareStats();
+      renderClients($('#searchClient')?.value || '');
+      renderAgenda();
+      renderHome();
+      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken herladen`);
+    } else {
+      showToast('Herladen mislukt — controleer internet en ververs de pagina.');
+    }
+    return ok;
   });
-  try {
-    saveData(DB);
-    return;
-  } catch (e2) { /* laatste redmiddel */ }
-  DB.clients.forEach(c => {
-    c.notes = (c.notes || '').slice(0, 220);
-    c.notesInternal = (c.notesInternal || '').slice(0, 120);
-  });
-  try {
-    saveData(DB);
-    showToast('Let op: opslag vol — notities sterk ingekort zodat alle klanten passen.');
-  } catch (e3) {
-    showToast('Importeren mislukt: browseropslag te klein. Gebruik eerst ↺ om te wissen of importeer in delen.');
-  }
 }
 function importClientsCsv(text) {
   let raw = text;
@@ -2444,12 +2526,12 @@ function tryMergeBundledSalonwareCsv() {
  * Laadt vooraf gebouwde salon-seed.json (klanten + afspraken) — werkt direct op GitHub Pages.
  * Geen handmatige stappen nodig voor bezoekers.
  */
-function bootstrapSalonFromHostedSeed() {
+function bootstrapSalonFromHostedSeed(force) {
   if (location.protocol === 'file:') return Promise.resolve(false);
   const stored = localStorage.getItem(SALON_SEED_KEY);
   const hasClients = (DB.clients || []).length > 0;
   const hasAppts = (DB.appointments || []).length > 0;
-  if (stored === SALON_SEED_VERSION && hasClients && hasAppts) {
+  if (!force && stored === SALON_SEED_VERSION && hasClients && hasAppts && !needsFullDataReload()) {
     return Promise.resolve(false);
   }
   return fetch(`salon-seed.json?v=${encodeURIComponent(SALON_SEED_VERSION)}`, { cache: 'no-store' })
@@ -2463,7 +2545,7 @@ function bootstrapSalonFromHostedSeed() {
       }
       DB.clients = seed.clients;
       DB.appointments = Array.isArray(seed.appointments) ? seed.appointments : [];
-      saveDataWithImportQuotaFix();
+      safeSaveData(DB, { quiet: true });
       localStorage.setItem(SALON_SEED_KEY, SALON_SEED_VERSION);
       console.log('[Salon] seed geladen:', seed.clients.length, 'klanten,', DB.appointments.length, 'afspraken');
       return true;
@@ -4578,6 +4660,7 @@ function renderDataPanel() {
         </label>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
           <button class="btn ghost" id="exportAll">📥 Backup downloaden (JSON)</button>
+          <button class="btn primary" id="reloadFromServer">↻ Gegevens opnieuw laden</button>
           <label class="btn ghost file-btn" style="cursor:pointer;">
             📤 Backup importeren
             <input type="file" id="importAll" accept="application/json" hidden />
@@ -4587,6 +4670,10 @@ function renderDataPanel() {
       </div>
     </div>`;
   $('#exportAll').addEventListener('click', () => downloadFile('salon-backup.json', JSON.stringify(DB,null,2), 'application/json'));
+  $('#reloadFromServer')?.addEventListener('click', () => {
+    if (!confirm('Alle klanten en afspraken opnieuw laden vanaf GitHub? Je wijzigingen sinds de laatste backup gaan verloren.')) return;
+    void reloadAllDataFromServer();
+  });
   $('#importAll').addEventListener('change', e => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -4627,6 +4714,7 @@ function renderDataPanel() {
     if (!confirm('Alle data wissen? Dit kan niet ongedaan worden.')) return;
     if (!confirm('Echt zeker?')) return;
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(APPOINTMENTS_STORAGE_KEY);
     localStorage.removeItem(SALON_SEED_KEY);
     DB = loadData();
     applyBurcuAkcayOverride();
@@ -6271,16 +6359,20 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#brandName').textContent = DB.settings.salonName || 'Salon';
   showView('home');
 
-  void bootstrapSalonFromHostedSeed().then(async seeded => {
+  void bootstrapSalonFromHostedSeed(needsFullDataReload()).then(async seeded => {
     const elim = await tryMergeBundledElimCsv();
     const stats = await tryMergeBundledSalonwareStats();
     if (!seeded && (DB.clients || []).length === 0) {
       await tryImportBundledSalonwareCsv();
     }
-    if (seeded || elim || stats) {
-      const bits = [`${DB.clients.length} klanten`, `${DB.appointments.length} afspraken (v2/ Elim)`];
+    if (seeded || elim || stats || needsFullDataReload()) {
+      const bits = [`${DB.clients.length} klanten`, `${DB.appointments.length} afspraken`];
       if (elim && (elim.updated || elim.added)) bits.push(`${elim.updated} notities bijgewerkt`);
-      showToast(bits.join(' · '));
+      if (seeded || (DB.clients.length > 100 && DB.appointments.length > 500)) {
+        showToast(bits.join(' · '));
+      } else if ((DB.clients || []).length < 50) {
+        showToast('Weinig data geladen — klik Instellingen → Gegevens opnieuw laden');
+      }
     }
     try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
     try {
