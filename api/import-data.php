@@ -27,7 +27,7 @@ if ($key === '' || !hash_equals($installKey, $key)) {
 
 $configPath = __DIR__ . '/config.php';
 if (!is_file($configPath)) {
-    import_html('Config ontbreekt', '<p>Stel eerst de database in via <a href="configure.php?key=' . htmlspecialchars($key) . '">configure.php</a>.</p>', false);
+    import_html('Config ontbreekt', '<p>Open de <a href="setup.php?key=' . htmlspecialchars($key) . '">alles-in-één setup</a>.</p>', false);
 }
 
 require_once __DIR__ . '/bootstrap.php';

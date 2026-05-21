@@ -2,15 +2,49 @@
 
 declare(strict_types=1);
 
-$configFile = __DIR__ . '/config.php';
-if (!is_file($configFile)) {
+function salon_find_config_file(): ?string
+{
+    $candidates = [
+        __DIR__ . '/config.php',
+        dirname(__DIR__) . '/salon-config.php',
+    ];
+    foreach ($candidates as $file) {
+        if (is_file($file)) {
+            return $file;
+        }
+    }
+    return null;
+}
+
+function salon_config_missing_response(): void
+{
+    $setup = '/api/setup.php?key=tijdelijk-installatie-wachtwoord';
+    $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+    if (str_contains($accept, 'text/html') && !str_contains($_SERVER['SCRIPT_NAME'] ?? '', 'bootstrap.php')) {
+        header('Content-Type: text/html; charset=utf-8');
+        http_response_code(503);
+        echo '<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            . '<title>Setup vereist</title></head><body style="font-family:system-ui,sans-serif;background:#eef5f0;min-height:100vh;display:grid;place-items:center;padding:16px">'
+            . '<div style="background:#fff;padding:28px;border-radius:14px;max-width:480px">'
+            . '<h1 style="color:#2d5a3d">Agenda instellen</h1>'
+            . '<p>Database is nog niet gekoppeld (config.php ontbreekt — vaak na Git redeploy).</p>'
+            . '<p><a href="' . htmlspecialchars($setup) . '" style="display:inline-block;padding:12px 20px;background:#5fa463;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">→ Alles in één keer instellen</a></p>'
+            . '</div></body></html>';
+        exit;
+    }
     http_response_code(503);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode([
         'ok' => false,
-        'error' => 'config.php ontbreekt — kopieer config.example.php naar config.php',
+        'error' => 'config.php ontbreekt — open /api/setup.php',
+        'setupUrl' => $setup,
     ], JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+$configFile = salon_find_config_file();
+if ($configFile === null) {
+    salon_config_missing_response();
 }
 
 require_once $configFile;

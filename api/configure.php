@@ -93,11 +93,12 @@ if (basename(\$_SERVER['SCRIPT_FILENAME'] ?? '') === basename(__FILE__)) {
 
 PHP;
 
-            if (@file_put_contents($configPath, $php) === false) {
+            if (@file_put_contents($configPath, $php) === false && @file_put_contents(dirname(__DIR__) . '/salon-config.php', $php) === false) {
                 $error = 'Kon config.php niet schrijven.';
             } else {
                 @chmod($configPath, 0600);
-                header('Location: install.php?key=' . urlencode($defaultInstallKey));
+                @chmod(dirname(__DIR__) . '/salon-config.php', 0600);
+                header('Location: setup.php?key=' . urlencode($defaultInstallKey));
                 exit;
             }
         }
