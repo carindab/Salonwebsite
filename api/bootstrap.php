@@ -199,3 +199,28 @@ function salon_counts(PDO $pdo): array
     $appointments = (int) $pdo->query('SELECT COUNT(*) FROM salon_appointments')->fetchColumn();
     return ['clients' => $clients, 'appointments' => $appointments];
 }
+
+/** Importeert salon-seed.json (2404 klanten, 10613 afspraken) naar MySQL. */
+function salon_import_seed(PDO $pdo): array
+{
+    $seedPath = dirname(__DIR__) . '/salon-seed.json';
+    if (!is_file($seedPath)) {
+        throw new RuntimeException('salon-seed.json niet gevonden');
+    }
+    $raw = file_get_contents($seedPath);
+    $seed = json_decode($raw ?: '', true);
+    if (!is_array($seed) || !isset($seed['clients'], $seed['appointments'])) {
+        throw new RuntimeException('Ongeldig salon-seed.json');
+    }
+    $pdo->beginTransaction();
+    salon_replace_clients($pdo, $seed['clients']);
+    salon_replace_appointments($pdo, $seed['appointments']);
+    $revision = salon_bump_revision($pdo);
+    $pdo->commit();
+    return [
+        'clients' => count($seed['clients']),
+        'appointments' => count($seed['appointments']),
+        'revision' => $revision,
+        'seedVersion' => $seed['v'] ?? null,
+    ];
+}

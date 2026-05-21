@@ -24,21 +24,17 @@ try {
     }
 
     $pdo = salon_pdo();
-    $pdo->beginTransaction();
-    salon_replace_clients($pdo, $seed['clients']);
-    salon_replace_appointments($pdo, $seed['appointments']);
-    $revision = salon_bump_revision($pdo);
-    $pdo->commit();
+    $result = salon_import_seed($pdo);
 
     salon_json_out([
         'ok' => true,
         'message' => 'Seed geïmporteerd',
-        'revision' => $revision,
+        'revision' => $result['revision'],
         'counts' => [
-            'clients' => count($seed['clients']),
-            'appointments' => count($seed['appointments']),
+            'clients' => $result['clients'],
+            'appointments' => $result['appointments'],
         ],
-        'seedVersion' => $seed['v'] ?? null,
+        'seedVersion' => $result['seedVersion'],
     ]);
 } catch (Throwable $e) {
     if (isset($pdo) && $pdo->inTransaction()) {

@@ -45,10 +45,22 @@ try {
         }
     }
 
+    $counts = salon_counts($pdo);
+    $importMsg = '';
+    if ($counts['clients'] < 50) {
+        set_time_limit(300);
+        ini_set('memory_limit', '512M');
+        $result = salon_import_seed($pdo);
+        $importMsg = '<p><strong>' . (int) $result['clients'] . ' klanten</strong> · '
+            . '<strong>' . (int) $result['appointments'] . ' afspraken</strong> geïmporteerd uit salon-seed.json.</p>';
+    } else {
+        $importMsg = '<p>Database bevat al ' . (int) $counts['clients'] . ' klanten — import overgeslagen.</p>';
+    }
+
     $next = 'setup-user.php?key=' . urlencode($key);
     install_html(
         'Database klaar ✓',
-        '<p>Tabellen zijn aangemaakt.</p><p><a href="' . htmlspecialchars($next) . '" style="display:inline-block;margin-top:12px;padding:12px 20px;background:#5fa463;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">→ Jouw login aanmaken</a></p>',
+        $importMsg . '<p><a href="' . htmlspecialchars($next) . '" style="display:inline-block;margin-top:12px;padding:12px 20px;background:#5fa463;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">→ Jouw login aanmaken</a></p>',
         true
     );
 } catch (Throwable $e) {

@@ -556,13 +556,18 @@ async function startAppAfterLogin() {
   $('#brandName').textContent = DB.settings.salonName || 'Salon';
   showView('home');
   const synced = await initServerDatabaseSync();
+  if (synced && (DB.clients || []).length < 50) {
+    showToast('Database is leeg — klanten worden geïmporteerd…');
+    await importSeedToServerDatabase(true);
+    await loadDatabaseFromServer({ quiet: true });
+  }
   if (!synced && (DB.clients || []).length === 0) {
     await bootstrapSalonFromHostedSeed(true);
     await tryMergeBundledElimCsv();
     await tryMergeBundledSalonwareStats();
   }
   if ((DB.clients || []).length < 50 && getSalonApiBase()) {
-    showToast('Weinig data — ga naar Instellingen → Data → Seed naar database importeren');
+    showToast('Weinig data — open Instellingen → Data → Seed naar database importeren');
   }
   try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
   renderClients($('#searchClient')?.value || '');
@@ -715,14 +720,13 @@ function scheduleServerDatabaseSave() {
   }, 2000);
 }
 
-async function importSeedToServerDatabase() {
+async function importSeedToServerDatabase(skipConfirm) {
   const base = getSalonApiBase();
-  const key = getSalonApiKey();
   if (!base || !hasServerAccess()) {
     showToast('Je moet ingelogd zijn');
     return false;
   }
-  if (!confirm('Alle klanten en afspraken uit salon-seed.json naar MySQL importeren? Bestaande database-data wordt overschreven.')) {
+  if (!skipConfirm && !confirm('Alle klanten en afspraken uit salon-seed.json naar MySQL importeren? Bestaande database-data wordt overschreven.')) {
     return false;
   }
   try {
