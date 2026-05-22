@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v31 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v31';
+console.log('%c[Salon Beheer] salon-app.js v32 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v32';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -569,7 +569,7 @@ function bindLoginForm() {
   });
 }
 
-/** Corrigeert Salonware-blokafspraken (pinksteren, Angelie): notities zichtbaar, geen 10-uur kolom. */
+/** Corrigeert Salonware-blokafspraken (pinksteren, Angelie): notities zichtbaar. */
 function repairPersonalBlockAppointments(options = {}) {
   let changed = 0;
   for (const a of DB.appointments || []) {
@@ -584,7 +584,7 @@ function repairPersonalBlockAppointments(options = {}) {
       it.preferSavedName = true;
       changed++;
     }
-    if (Number(it.duration) > 480) {
+    if (Number(it.duration) > 480 && isWorkWeek(a.date)) {
       it.duration = 60;
       changed++;
     }
@@ -1187,6 +1187,53 @@ function isWorkWeek(dateISO) {
 }
 
 /** Wite slot in de agenda: werkweek-dag én binnen openingstijden (overige tijden = grijs). */
+function getUpcomingBirthdays(maxShow = 6) {
+  const todayD = new Date();
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(todayD);
+    d.setDate(d.getDate() + i);
+    days.push({
+      md: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+      order: i,
+    });
+  }
+  const mdSet = new Set(days.map(x => x.md));
+  const seen = new Set();
+  const out = [];
+  for (const c of DB.clients || []) {
+    if (!c.birthday || c.birthday.length < 10) continue;
+    const md = c.birthday.slice(5);
+    if (!mdSet.has(md)) continue;
+    const y = parseInt(c.birthday.slice(0, 4), 10);
+    if (!Number.isFinite(y) || y < 1920 || y > 2015) continue;
+    const key = `${md}|${clientFullName(c).toLowerCase().replace(/\s+/g, ' ').trim()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ c, md, order: days.find(d => d.md === md)?.order ?? 99 });
+  }
+  out.sort((a, b) => a.order - b.order || a.md.localeCompare(b.md) || clientFullName(a.c).localeCompare(clientFullName(b.c)));
+  return out.slice(0, maxShow);
+}
+
+const nlHolidayCache = {};
+async function prefetchNlPublicHolidays(years) {
+  const todo = [...new Set(years)].filter(y => y && !nlHolidayCache[y]);
+  if (!todo.length) return;
+  await Promise.all(todo.map(async (year) => {
+    try {
+      const res = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/NL`);
+      if (!res.ok) return;
+      nlHolidayCache[year] = await res.json();
+    } catch { /* offline */ }
+  }));
+}
+function getHolidayLabel(dateISO) {
+  const list = nlHolidayCache[dateISO.slice(0, 4)] || [];
+  const hit = list.find(h => h.date === dateISO);
+  return hit ? hit.localName : '';
+}
+
 function isAgendaSlotWorkTime(dateISO, slot) {
   if (!isWorkWeek(dateISO)) return false;
   const t = timeToMinutes(slot);
@@ -1364,30 +1411,25 @@ function renderHome() {
     ? open.map(a => {
         const c = findClient(a.clientId);
         const betaalLbl = a.betaalwijze ? getBetaalwijzeLabel(a.betaalwijze) : 'open';
-        return `<tr>
+        return `<tr class="open-amount-row" data-open-app="${a.id}">
           <td>${fmtDate(a.date)} ${escapeHtml(a.time)}</td>
           <td><span class="name-link" data-client="${c?.id||''}">${escapeHtml(clientFullName(c))}</span></td>
           <td class="amount">${fmtMoney(appointmentTotal(a))} <span style="font-size:11px; color:var(--muted);">(${escapeHtml(betaalLbl)})</span> ${a.notes ? `<br><span style="font-size:11px; color:var(--muted);">${escapeHtml(a.notes)}</span>` : ''}</td>
-          <td><button class="row-btn complete" data-mark-paid="${a.id}" title="Markeren als betaald">✓</button></td>
+          <td class="row-actions">
+            <button class="row-btn edit" data-edit-open="${a.id}" title="Afspraak openen">✎</button>
+            <button class="row-btn complete" data-mark-paid="${a.id}" title="Markeren als betaald">✓</button>
+          </td>
         </tr>`;
       }).join('')
     : `<tr><td colspan="4" class="empty">Geen openstaande bedragen.</td></tr>`;
 
-  // Verjaardagen komende 7 dagen
-  const todayD = new Date();
-  const weekAhead = [];
-  for (let i = 0; i < 7; i++) { const d = new Date(todayD); d.setDate(d.getDate()+i); weekAhead.push(`${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`); }
-  const bdays = DB.clients
-    .filter(c => c.birthday)
-    .filter(c => weekAhead.includes(c.birthday.slice(5)))
-    .sort((a,b) => a.birthday.slice(5).localeCompare(b.birthday.slice(5)));
-
+  const bdays = getUpcomingBirthdays(6);
   $('#birthdays').innerHTML = bdays.length
-    ? bdays.map(c => `<div class="birthday-row">
-        <span class="name">${escapeHtml(clientFullName(c))}</span>
-        <span class="date">${escapeHtml(c.birthday.slice(5).replace('-','-'))}</span>
+    ? bdays.map(({ c, md }) => `<div class="birthday-row">
+        <span class="name name-link" data-client="${escapeHtml(c.id)}">${escapeHtml(clientFullName(c))}</span>
+        <span class="date">${escapeHtml(md.replace('-', '-'))}</span>
       </div>`).join('')
-    : `<p class="empty">Geen verjaardagen deze week.</p>`;
+    : `<p class="empty">Geen verjaardagen komende dagen.</p>`;
 
   // Bezetting
   const dayMinutes = (() => {
@@ -1464,40 +1506,47 @@ function isPlaceholderClient(c) {
 function isAgendaPersonalBlock(a) {
   const items = a.items || [];
   if (items.length !== 1 || items[0].kind !== 'treatment') return false;
+  const cat = (items[0].category || '').toLowerCase();
   const sn = (items[0].savedName || '').trim().toLowerCase();
-  return sn === 'afspraak' || sn.includes('eigen afspraak') || sn.includes('overige eigen');
+  if (cat.includes('eigen afspraak') || cat.includes('overige eigen')) return true;
+  return sn === 'afspraak' || sn.includes('eigen afspraak');
 }
-/** Blok-afspraken (vakantie/pinksteren/notitie): niet als hele witte kolom tekenen. */
-function isAgendaBlockAppointment(a) {
-  if (isAgendaPersonalBlock(a)) return true;
+/** Vrije dag / feestdag: heel dagvlak (pinksteren op maandag). */
+function isAgendaFullDayBlock(a, dateISO) {
+  if (!isAgendaPersonalBlock(a)) return false;
+  if (!isWorkWeek(dateISO)) return true;
   return (appointmentDurationMins(a) || 0) >= 240;
 }
 function agendaBlockClientLabel(a, c) {
-  if (isPlaceholderClient(c)) return 'Onbekende klant';
-  return clientFullName(c);
+  const name = isPlaceholderClient(c) ? 'Onbekende klant' : clientFullName(c);
+  if (isAgendaFullDayBlock(a, a.date)) return `${a.time}: ${name}`;
+  return name;
 }
 function agendaBlockServiceLabel(a) {
   const notes = (a.notes || '').trim();
   const summary = appointmentSummary(a);
   if (notes && notes !== 'Elim v2 import') {
     if (/^1 × Afspraak$/i.test(summary) || isAgendaPersonalBlock(a)) {
-      return `Afspraak ${notes}`;
+      return notes.toLowerCase() === 'afspraak' ? 'Afspraak' : `Afspraak ${notes}`;
     }
   }
   return summary;
 }
-function agendaVisualDurationMins(a, dateISO) {
+function agendaVisualDurationMins(a, dateISO, gridEndMin) {
   const raw = appointmentDurationMins(a) || 30;
   const start = timeToMinutes(a.time);
-  const close = timeToMinutes(DB.settings.closeTime || '18:00');
-  const untilClose = Math.max(5, close - start);
-  if (isAgendaBlockAppointment(a)) return Math.min(45, untilClose);
-  return Math.min(raw, untilClose);
+  const end = gridEndMin ?? timeToMinutes(DB.settings.closeTime || '18:00');
+  const untilEnd = Math.max(5, end - start);
+  if (isAgendaFullDayBlock(a, dateISO)) return untilEnd;
+  return Math.min(raw, untilEnd);
 }
 function getAgendaSlotRange(weekDates, appsByDay, mode) {
   if (mode === 'full') return { startMin: AGENDA_GRID_START_MIN, endMin: AGENDA_GRID_END_MIN };
   const open = timeToMinutes(DB.settings.openTime || '08:30');
-  const close = timeToMinutes(DB.settings.closeTime || '18:00');
+  let close = timeToMinutes(DB.settings.closeTime || '18:00');
+  if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+    close = AGENDA_GRID_END_MIN;
+  }
   return {
     startMin: Math.max(AGENDA_GRID_START_MIN, Math.floor(open / 5) * 5),
     endMin: Math.min(AGENDA_GRID_END_MIN, Math.ceil(close / 5) * 5),
@@ -1547,6 +1596,20 @@ function fmtDayHeader(iso) {
 function renderAgenda() {
   const weekDates = getWeekDates(agendaCurrentDate);
   const viewMode = getAgendaViewMode();
+  void prefetchNlPublicHolidays(weekDates.map(d => d.slice(0, 4))).then(() => {
+    weekDates.forEach(d => {
+      const col = document.querySelector(`.day-col[data-date="${d}"]`);
+      if (!col || col.querySelector('.holiday-label')) return;
+      const holiday = getHolidayLabel(d);
+      if (!holiday) return;
+      const el = document.createElement('div');
+      el.className = 'holiday-label';
+      el.textContent = holiday;
+      const freeLabel = col.querySelector('.free-label');
+      if (freeLabel) col.insertBefore(el, freeLabel);
+      else col.appendChild(el);
+    });
+  });
   updateAgendaViewToggle();
   $('#agendaDate').value = agendaCurrentDate;
 
@@ -1573,23 +1636,31 @@ function renderAgenda() {
   thead.innerHTML = weekDates.map(d => {
     const isToday = d === todayStr;
     const work = isWorkWeek(d);
+    const holiday = getHolidayLabel(d);
     return `<div class="day-col${isToday ? ' today-col' : ''}${!work ? ' free-week-col' : ''}" data-date="${d}">
         ${fmtDayHeader(d)}
+        ${holiday ? `<div class="holiday-label">${escapeHtml(holiday)}</div>` : ''}
         ${!work ? '<div class="free-label">vrij</div>' : ''}
       </div>`;
   }).join('');
 
   // Kolommen met vaste 5-min rijen; afspraken als overlay (kruist niet met andere dagen)
   const tbody = $('#agendaTbody');
-  const appBlock = (a, topPx, heightPx) => {
+  const appBlock = (a, topPx, heightPx, dateISO) => {
     const c = findClient(a.clientId);
     const durMins = appointmentDurationMins(a);
-    const marker = isAgendaBlockAppointment(a);
-    const blockH = marker ? Math.min(heightPx, 48) : heightPx;
-    return `<div class="app-block${marker ? ' app-block--marker' : ''}" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;min-height:0;height:${blockH}px;max-height:${marker ? blockH : 'none'}px">
+    const fullDay = isAgendaFullDayBlock(a, dateISO);
+    const shortMarker = isAgendaPersonalBlock(a) && !fullDay;
+    const blockH = shortMarker ? Math.min(heightPx, 48) : heightPx;
+    const cls = fullDay ? ' app-block--fullday' : (shortMarker ? ' app-block--marker' : '');
+    const serviceLabel = agendaBlockServiceLabel(a);
+    const serviceHtml = fullDay && serviceLabel.startsWith('Afspraak ')
+      ? `Afspraak <em>${escapeHtml(serviceLabel.slice(8))}</em>`
+      : escapeHtml(serviceLabel);
+    return `<div class="app-block${cls}" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;min-height:0;height:${blockH}px;max-height:${shortMarker ? blockH : 'none'}px">
           <div class="app-name">${escapeHtml(agendaBlockClientLabel(a, c))}</div>
-          <div class="app-service">${escapeHtml(agendaBlockServiceLabel(a))}</div>
-          ${durMins && !marker ? `<div class="app-dur">${durMins} min</div>` : ''}
+          <div class="app-service">${serviceHtml}</div>
+          ${durMins && !fullDay && !shortMarker ? `<div class="app-dur">${durMins} min</div>` : ''}
           <div class="app-actions">
             ${a.status==='gepland' ? `<button class="app-btn complete" data-complete="${a.id}" title="Afronden">✓</button>` : ''}
             ${a.status==='afgerond'&&!a.paid ? `<button class="app-btn paid" data-mark-paid="${a.id}" title="Betaald">€</button>` : ''}
@@ -1609,14 +1680,17 @@ function renderAgenda() {
       return `<div class="${cls}" data-date="${d}" data-slot="${slot}">${agendaSlotInnerHtml(d, slot)}</div>`;
     }).join('');
     const fillerH = Math.max(0, minColH - baseH);
-    const filler = fillerH > 0 ? `<div class="agenda-slot-filler" style="height:${fillerH}px" aria-hidden="true"></div>` : '';
+    const fillerCount = fillerH > 0 ? Math.ceil(fillerH / spx) : 0;
+    const filler = fillerCount > 0
+      ? Array.from({ length: fillerCount }, () => '<div class="agenda-slot agenda-slot--closed agenda-slot--filler" aria-hidden="true"></div>').join('')
+      : '';
     const blocks = apps.map((a) => {
       const idx = slotIndexForTime(a.time, slots);
-      const visDur = agendaVisualDurationMins(a, d);
+      const visDur = agendaVisualDurationMins(a, d, endMin);
       const span = Math.max(1, Math.ceil(visDur / 5));
       const h = span * spx;
       const top = idx * spx;
-      return appBlock(a, top, h);
+      return appBlock(a, top, h, d);
     }).join('');
     return `<div class="agenda-day-col${!work ? ' free-day-col' : ''}" data-date="${d}" style="min-height:${minColH}px"><div class="agenda-day-slots">${slotEls}${filler}</div><div class="agenda-day-apps">${blocks}</div></div>`;
   }).join('');
@@ -4767,14 +4841,16 @@ function renderDagrapport() {
               const c = findClient(a.clientId);
               const tot = appointmentTotal(a);
               const items = (a.items||[]).map(it=>escapeHtml(describeItem(it))).join(', ');
-              return `<tr>
+              return `<tr class="dag-row${!a.paid ? ' dag-row--open' : ''}" data-dag-app="${a.id}">
                 <td>${a.time}</td>
-                <td>${escapeHtml(clientFullName(c))}</td>
+                <td>${c?.id ? `<span class="name-link dag-client-link" data-client="${c.id}">${escapeHtml(clientFullName(c))}</span>` : escapeHtml(clientFullName(c))}</td>
                 <td style="color:var(--muted); font-size:13px;">${items || '—'}</td>
                 <td class="amount">${fmtMoney(tot)}</td>
                 <td>${a.paid
                   ? `<span style="color:var(--green)">✓ ${escapeHtml(a.betaalwijze||'pin')}</span>`
-                  : `<span class="pill openstaand">Openstaand</span>`}</td>
+                  : `<span class="pill openstaand">Openstaand</span>
+                     <button class="row-btn edit dag-open-app" data-dag-app="${a.id}" title="Afspraak openen">✎</button>
+                     <button class="row-btn complete dag-mark-paid" data-dag-pay="${a.id}" title="Betaald">✓</button>`}</td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -6762,6 +6838,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (link?.dataset.client) { openKlantdossier(link.dataset.client); return; }
     const mpBtn = e.target.closest('[data-mark-paid]');
     if (mpBtn) markPaid(mpBtn.dataset.markPaid);
+    const editOpen = e.target.closest('[data-edit-open]');
+    if (editOpen) {
+      const app = DB.appointments.find(a => a.id === editOpen.dataset.editOpen);
+      if (app) openAppointmentModal(app);
+    }
   });
 
   /* ---- Agenda ---- */
@@ -7022,6 +7103,27 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target.id==='dagNext')   { const d=new Date(dagDate); d.setDate(d.getDate()+1); dagDate=d.toISOString().slice(0,10); renderDagrapport(); }
     if (e.target.id==='dagToday')  { dagDate=todayISO(); renderDagrapport(); }
     if (e.target.id==='printDag')  { window.print(); }
+
+    const dagClient = e.target.closest('.dag-client-link[data-client]');
+    if (dagClient?.dataset.client) { openKlantdossier(dagClient.dataset.client); return; }
+    const dagOpen = e.target.closest('.dag-open-app[data-dag-app]');
+    if (dagOpen?.dataset.dagApp) {
+      const app = DB.appointments.find(a => a.id === dagOpen.dataset.dagApp);
+      if (app) openAppointmentModal(app);
+      return;
+    }
+    const dagPay = e.target.closest('.dag-mark-paid[data-dag-pay]');
+    if (dagPay?.dataset.dagPay) {
+      markPaid(dagPay.dataset.dagPay);
+      renderDagrapport();
+      return;
+    }
+    const dagRow = e.target.closest('tr.dag-row--open[data-dag-app]');
+    if (dagRow?.dataset.dagApp && !e.target.closest('button')) {
+      const app = DB.appointments.find(a => a.id === dagRow.dataset.dagApp);
+      if (app) openAppointmentModal(app);
+      return;
+    }
 
     const zoek = e.target.closest('.rap-zoeken');
     if (zoek) { const r = zoek.dataset.rep; if (repRender[r]) repRender[r](); }

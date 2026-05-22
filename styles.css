@@ -308,7 +308,11 @@ button { font-family: inherit; cursor: pointer; }
 }
 .row-btn:hover { background: var(--bg); color: var(--text); }
 .row-btn.complete { color: var(--green); }
-.row-btn.delete { color: var(--red); }
+.row-btn.edit { color: var(--muted); }
+.row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.dag-row--open { cursor: pointer; }
+.dag-row--open:hover { background: #faf7f3; }
+.dag-row .row-btn { margin-left: 6px; }
 
 .file-btn { position: relative; cursor: pointer; }
 
@@ -879,11 +883,25 @@ body.client-drawer-open {
   min-height: calc(100dvh - 200px);
 }
 .agenda-scroll.agenda-scroll--compact { overflow-y: visible; }
-.agenda-slot-filler {
-  background: var(--bg);
-  border-bottom: 0;
+@media (max-width: 900px) {
+  .view[data-view="agenda"]:not(.hidden) {
+    min-height: calc(100dvh - 52px - env(safe-area-inset-top));
+  }
+  .view[data-view="agenda"] .agenda-week-card {
+    min-height: calc(100dvh - 120px - env(safe-area-inset-top));
+  }
+  .view[data-view="agenda"] .agenda-scroll {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+    max-height: calc(100dvh - 132px - env(safe-area-inset-top));
+  }
+  .agenda-scroll.agenda-scroll--compact {
+    overflow-y: auto !important;
+  }
+}
+.agenda-slot-filler,
+.agenda-slot.agenda-slot--filler {
   pointer-events: none;
-  width: 100%;
 }
 body.kopie-placing .agenda-slot {
   cursor: pointer;
@@ -974,6 +992,7 @@ body.kopie-placing .agenda-day-apps .app-block {
   color: rgba(255,255,255,0.88);
 }
 .free-label { font-size: 10px; color: #fff2a0; font-weight: 600; }
+.holiday-label { font-size: 9px; color: #fff8dc; font-weight: 600; line-height: 1.2; margin-top: 2px; }
 
 .agenda-body { width: 100%; }
 .agenda-cols {
@@ -1232,6 +1251,13 @@ body.kopie-placing .agenda-day-apps .app-block {
   overflow: hidden;
 }
 .app-block.app-block--marker .app-service { font-style: italic; }
+.app-block.app-block--fullday {
+  background: #fff;
+  border: 1px solid #d4c4b4;
+  border-left: 3px solid #d4c4b4;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+}
+.app-block.app-block--fullday .app-service em { font-style: italic; color: var(--muted); }
 
 .app-block {
   position: absolute;
