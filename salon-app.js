@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v32 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v32';
+console.log('%c[Salon Beheer] salon-app.js v33 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v33';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -334,6 +334,7 @@ function isQuotaError(e) {
 /** Slaat op in twee keys; trimt notities bij volle opslag. Gooit nooit onopvangen. */
 function safeSaveData(d, opts = {}) {
   const quiet = !!opts.quiet;
+  invalidateAppointmentsIndex();
   const appts = Array.isArray(d.appointments) ? d.appointments : [];
   const main = { ...d };
   delete main.appointments;
@@ -389,6 +390,7 @@ function safeSaveData(d, opts = {}) {
 }
 
 function saveData(d) {
+  invalidateAppointmentsIndex();
   safeSaveData(d, { quiet: false });
   scheduleServerDatabaseSave();
 }
@@ -570,6 +572,17 @@ function bindLoginForm() {
 }
 
 /** Corrigeert Salonware-blokafspraken (pinksteren, Angelie): notities zichtbaar. */
+function agendaDayOffLabel(a) {
+  const notes = (a.notes || '').trim();
+  const sn = ((a.items || [])[0]?.savedName || '').trim();
+  return `${notes} ${sn}`.toLowerCase();
+}
+function isAgendaDayOffBlock(a) {
+  if (!isAgendaPersonalBlock(a)) return false;
+  if (!isPlaceholderClient(findClient(a.clientId))) return false;
+  const label = agendaDayOffLabel(a);
+  return /pinkster|hemelvaart|koningsdag|bevrijdingsdag|vakantie|gesloten|feestdag|kerst|pasen|goede vrijdag|oude?jaar|nieuwjaar|sluiten|vrije dag/.test(label);
+}
 function repairPersonalBlockAppointments(options = {}) {
   let changed = 0;
   for (const a of DB.appointments || []) {
@@ -584,7 +597,10 @@ function repairPersonalBlockAppointments(options = {}) {
       it.preferSavedName = true;
       changed++;
     }
-    if (Number(it.duration) > 480 && isWorkWeek(a.date)) {
+    if (isAgendaDayOffBlock(a) && Number(it.duration) < 240) {
+      it.duration = 600;
+      changed++;
+    } else if (Number(it.duration) > 480 && isWorkWeek(a.date) && !isAgendaDayOffBlock(a)) {
       it.duration = 60;
       changed++;
     }
@@ -595,6 +611,10 @@ function repairPersonalBlockAppointments(options = {}) {
 
 async function startAppAfterLogin() {
   $('#brandName').textContent = DB.settings.salonName || 'Salon';
+  const tbodyToday = $('#todayReservations');
+  if (tbodyToday) {
+    tbodyToday.innerHTML = '<tr><td colspan="4" class="empty">Reserveringen laden…</td></tr>';
+  }
   showView('home');
   const synced = await initServerDatabaseSync();
   if (synced && (DB.clients || []).length < 50) {
@@ -634,6 +654,7 @@ function applyServerPayload(payload) {
   if (Array.isArray(payload.clients)) DB.clients = payload.clients;
   if (Array.isArray(payload.appointments)) DB.appointments = payload.appointments;
   DB = applyDataDefaults(DB);
+  invalidateAppointmentsIndex();
   repairPersonalBlockAppointments({ quiet: true });
   serverSync.revision = Number(payload.revision) || serverSync.revision;
   localStorage.setItem(SALON_SERVER_REVISION_KEY, String(serverSync.revision));
@@ -1134,15 +1155,39 @@ function appointmentSummary(a) {
 function treatmentItemDurationMins(it) {
   if (!it || it.kind !== 'treatment') return 0;
   const qty = it.qty || 1;
-  const stored = Number(it.duration);
-  if (stored > 1) return stored * qty;
+  if (it.duration !== undefined && it.duration !== null && it.duration !== '') {
+    const stored = Number(it.duration);
+    if (Number.isFinite(stored) && stored >= 0) return stored * qty;
+  }
   const cat = findTreatment(it.refId)?.duration;
-  if (cat > 1) return cat * qty;
+  if (cat !== undefined && cat !== null) {
+    const d = Number(cat);
+    if (Number.isFinite(d) && d > 0) return d * qty;
+  }
   return 30 * qty;
 }
 /** Totale minuten (alleen behandelingen) op de afspraak. */
 function appointmentDurationMins(a) {
   return (a.items || []).reduce((s, it) => s + treatmentItemDurationMins(it), 0);
+}
+
+let appointmentsByDateIndex = null;
+function invalidateAppointmentsIndex() {
+  appointmentsByDateIndex = null;
+}
+function getAppointmentsByDate(dateISO) {
+  if (!appointmentsByDateIndex) {
+    appointmentsByDateIndex = new Map();
+    for (const a of DB.appointments || []) {
+      if (a.status === 'geannuleerd' || a.status === 'verwijderd') continue;
+      if (!appointmentsByDateIndex.has(a.date)) appointmentsByDateIndex.set(a.date, []);
+      appointmentsByDateIndex.get(a.date).push(a);
+    }
+    for (const list of appointmentsByDateIndex.values()) {
+      list.sort((x, y) => x.time.localeCompare(y.time));
+    }
+  }
+  return appointmentsByDateIndex.get(dateISO) || [];
 }
 function timeToMinutes(t) {
   if (!t || typeof t !== 'string') return 0;
@@ -1384,9 +1429,7 @@ function switchRapportageTab(tab) {
    ========================================================= */
 function renderHome() {
   const today = todayISO();
-  const todayApps = DB.appointments
-    .filter(a => a.date === today && a.status !== 'geannuleerd' && a.status !== 'verwijderd')
-    .sort((a,b) => a.time.localeCompare(b.time));
+  const todayApps = getAppointmentsByDate(today);
 
   const tbodyToday = $('#todayReservations');
   tbodyToday.innerHTML = todayApps.length
@@ -1457,7 +1500,7 @@ function renderHome() {
     : `<p class="empty">Er zijn geen afspraken (meer) vandaag.</p>`;
 
   const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); })();
-  const tomApps = DB.appointments.filter(a => a.date === tomorrow && a.status !== 'geannuleerd' && a.status !== 'verwijderd').sort((a,b) => a.time.localeCompare(b.time));
+  const tomApps = getAppointmentsByDate(tomorrow);
   $('#appointmentsTomorrow').innerHTML = tomApps.length
     ? tomApps.map(a => `<div class="birthday-row"><span class="name">${escapeHtml(a.time)} – ${escapeHtml(clientFullName(findClient(a.clientId)))}</span><span class="date">${escapeHtml(appointmentSummary(a))}</span></div>`).join('')
     : `<p class="empty">Er zijn geen afspraken gepland morgen.</p>`;
@@ -1511,11 +1554,12 @@ function isAgendaPersonalBlock(a) {
   if (cat.includes('eigen afspraak') || cat.includes('overige eigen')) return true;
   return sn === 'afspraak' || sn.includes('eigen afspraak');
 }
-/** Vrije dag / feestdag: heel dagvlak (pinksteren op maandag). */
+/** Vrije dag / feestdag: heel dagvlak (alleen pinksteren e.d., niet Angelie/Samira). */
 function isAgendaFullDayBlock(a, dateISO) {
   if (!isAgendaPersonalBlock(a)) return false;
-  if (!isWorkWeek(dateISO)) return true;
-  return (appointmentDurationMins(a) || 0) >= 240;
+  const dur = appointmentDurationMins(a) || 0;
+  if (dur >= 240) return true;
+  return isAgendaDayOffBlock(a);
 }
 function agendaBlockClientLabel(a, c) {
   const name = isPlaceholderClient(c) ? 'Onbekende klant' : clientFullName(c);
@@ -1650,17 +1694,16 @@ function renderAgenda() {
     const c = findClient(a.clientId);
     const durMins = appointmentDurationMins(a);
     const fullDay = isAgendaFullDayBlock(a, dateISO);
-    const shortMarker = isAgendaPersonalBlock(a) && !fullDay;
-    const blockH = shortMarker ? Math.min(heightPx, 48) : heightPx;
-    const cls = fullDay ? ' app-block--fullday' : (shortMarker ? ' app-block--marker' : '');
+    const personal = isAgendaPersonalBlock(a) && !fullDay;
+    const cls = fullDay ? ' app-block--fullday' : (personal ? ' app-block--personal' : '');
     const serviceLabel = agendaBlockServiceLabel(a);
-    const serviceHtml = fullDay && serviceLabel.startsWith('Afspraak ')
+    const serviceHtml = (fullDay || personal) && serviceLabel.startsWith('Afspraak ')
       ? `Afspraak <em>${escapeHtml(serviceLabel.slice(8))}</em>`
       : escapeHtml(serviceLabel);
-    return `<div class="app-block${cls}" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;min-height:0;height:${blockH}px;max-height:${shortMarker ? blockH : 'none'}px">
+    return `<div class="app-block${cls}" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;height:${heightPx}px;min-height:${Math.max(heightPx, personal ? 36 : 24)}px">
           <div class="app-name">${escapeHtml(agendaBlockClientLabel(a, c))}</div>
           <div class="app-service">${serviceHtml}</div>
-          ${durMins && !fullDay && !shortMarker ? `<div class="app-dur">${durMins} min</div>` : ''}
+          ${durMins ? `<div class="app-dur">${durMins} min</div>` : ''}
           <div class="app-actions">
             ${a.status==='gepland' ? `<button class="app-btn complete" data-complete="${a.id}" title="Afronden">✓</button>` : ''}
             ${a.status==='afgerond'&&!a.paid ? `<button class="app-btn paid" data-mark-paid="${a.id}" title="Betaald">€</button>` : ''}
@@ -1916,7 +1959,14 @@ function openAppointmentModal(existing) {
         item => {
           const ref = item.kind==='treatment' ? findTreatment(item.id) : findProduct(item.id);
           if (!ref) return;
-          working.items.push({ kind: item.kind, refId: ref.id, savedName: ref.name, qty: 1, price: ref.price });
+          working.items.push({
+            kind: item.kind,
+            refId: ref.id,
+            savedName: ref.name,
+            qty: 1,
+            price: ref.price,
+            duration: item.kind === 'treatment' ? (Number(ref.duration) > 0 ? Number(ref.duration) : 30) : 0,
+          });
           render();
         }
       );
@@ -1928,9 +1978,8 @@ function openAppointmentModal(existing) {
     $$('[data-na-dur]').forEach(inp => inp.addEventListener('change', () => {
       const idx = Number(inp.dataset.naDur);
       const it = working.items[idx];
-      if (it.kind==='treatment') {
-        const ref = findTreatment(it.refId);
-        if (ref) ref.duration = Number(inp.value)||0;  // tijdelijk override; zou eigenlijk per-item duur moeten zijn
+      if (it && it.kind === 'treatment') {
+        it.duration = Math.max(0, Number(inp.value) || 0);
       }
       render();
     }));

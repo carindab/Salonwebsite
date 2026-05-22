@@ -1091,13 +1091,18 @@ body.kopie-placing .agenda-day-apps .app-block {
     font-size: 9px;
     padding: 2px 4px;
     line-height: 1.2;
+    overflow: hidden;
   }
-  .agenda-day-apps .app-name {
-    font-size: 9px;
+  .agenda-day-apps .app-name,
+  .agenda-day-apps .app-service {
+    white-space: normal;
+    overflow: hidden;
+    word-break: break-word;
+    line-height: 1.15;
   }
-  .agenda-day-apps .app-service,
   .agenda-day-apps .app-dur {
     font-size: 8px;
+    flex-shrink: 0;
   }
   .agenda-day-apps .app-btn {
     padding: 1px 3px;
@@ -1251,6 +1256,12 @@ body.kopie-placing .agenda-day-apps .app-block {
   overflow: hidden;
 }
 .app-block.app-block--marker .app-service { font-style: italic; }
+.app-block.app-block--personal {
+  background: #f0e4d7;
+  border: 1px solid #d4c4b4;
+  border-left: 3px solid var(--accent);
+}
+.app-block.app-block--personal .app-service em { font-style: italic; color: var(--muted); }
 .app-block.app-block--fullday {
   background: #fff;
   border: 1px solid #d4c4b4;
