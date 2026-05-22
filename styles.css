@@ -868,15 +868,15 @@ body.client-drawer-open {
   max-height: none;
   background: var(--bg);
   overflow-x: auto;
-  overflow-y: visible;
+  overflow-y: auto;
 }
-.view[data-view="agenda"] .agenda-week-grid {
-  min-height: calc(100dvh - 170px);
+.view[data-view="agenda"] .agenda-week-grid,
+.view[data-view="agenda"] .agenda-body,
+.view[data-view="agenda"] .agenda-cols {
   background: var(--bg);
 }
-.view[data-view="agenda"] .agenda-body {
-  min-height: calc(100dvh - 220px);
-  background: var(--bg);
+.view[data-view="agenda"] .agenda-cols {
+  min-height: calc(100dvh - 200px);
 }
 .agenda-scroll.agenda-scroll--compact { overflow-y: visible; }
 .agenda-slot-filler {
@@ -1227,9 +1227,9 @@ body.kopie-placing .agenda-day-apps .app-block {
   background: #f5efe8;
   border: 1px dashed #c4b5a5;
   color: var(--text);
-  min-height: 36px !important;
-  height: auto !important;
+  min-height: 36px;
   max-height: 52px;
+  overflow: hidden;
 }
 .app-block.app-block--marker .app-service { font-style: italic; }
 

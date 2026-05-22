@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v30 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v30';
+console.log('%c[Salon Beheer] salon-app.js v31 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v31';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -569,6 +569,30 @@ function bindLoginForm() {
   });
 }
 
+/** Corrigeert Salonware-blokafspraken (pinksteren, Angelie): notities zichtbaar, geen 10-uur kolom. */
+function repairPersonalBlockAppointments(options = {}) {
+  let changed = 0;
+  for (const a of DB.appointments || []) {
+    const items = a.items || [];
+    if (!items.length || items[0].kind !== 'treatment') continue;
+    const it = items[0];
+    const notes = (a.notes || '').trim();
+    const sn = (it.savedName || '').trim().toLowerCase();
+    const generic = sn === 'afspraak' || sn.includes('eigen afspraak') || sn.includes('overige eigen');
+    if (generic && notes && notes !== 'Elim v2 import' && it.savedName !== notes) {
+      it.savedName = notes;
+      it.preferSavedName = true;
+      changed++;
+    }
+    if (Number(it.duration) > 480) {
+      it.duration = 60;
+      changed++;
+    }
+  }
+  if (changed && !options.quiet) saveData(DB, { quiet: true });
+  return changed;
+}
+
 async function startAppAfterLogin() {
   $('#brandName').textContent = DB.settings.salonName || 'Salon';
   showView('home');
@@ -586,6 +610,8 @@ async function startAppAfterLogin() {
   if ((DB.clients || []).length < 50 && getSalonApiBase()) {
     showToast('Weinig data — open Instellingen → Data → Seed naar database importeren');
   }
+  const repaired = repairPersonalBlockAppointments({ quiet: true });
+  if (repaired) saveData(DB, { quiet: true });
   try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
   renderClients($('#searchClient')?.value || '');
   renderAgenda();
@@ -608,6 +634,7 @@ function applyServerPayload(payload) {
   if (Array.isArray(payload.clients)) DB.clients = payload.clients;
   if (Array.isArray(payload.appointments)) DB.appointments = payload.appointments;
   DB = applyDataDefaults(DB);
+  repairPersonalBlockAppointments({ quiet: true });
   serverSync.revision = Number(payload.revision) || serverSync.revision;
   localStorage.setItem(SALON_SERVER_REVISION_KEY, String(serverSync.revision));
   serverSync.counts = payload.counts || {
@@ -1427,16 +1454,44 @@ function buildAgendaSlots(startMin, endMin) {
   for (let t = s; t < e; t += 5) slots.push(minutesToAgendaTime(t));
   return slots.length ? slots : [minutesToAgendaTime(s)];
 }
-/** Blok-afspraken (vakantie/pinksteren): niet als hele witte kolom tekenen. */
+function isPlaceholderClient(c) {
+  if (!c) return true;
+  const id = String(c.id || '');
+  if (id === 'c_sw_0') return true;
+  const name = clientFullName(c).toLowerCase();
+  return name.includes('onbekende klant') || name === '?';
+}
+function isAgendaPersonalBlock(a) {
+  const items = a.items || [];
+  if (items.length !== 1 || items[0].kind !== 'treatment') return false;
+  const sn = (items[0].savedName || '').trim().toLowerCase();
+  return sn === 'afspraak' || sn.includes('eigen afspraak') || sn.includes('overige eigen');
+}
+/** Blok-afspraken (vakantie/pinksteren/notitie): niet als hele witte kolom tekenen. */
 function isAgendaBlockAppointment(a) {
+  if (isAgendaPersonalBlock(a)) return true;
   return (appointmentDurationMins(a) || 0) >= 240;
+}
+function agendaBlockClientLabel(a, c) {
+  if (isPlaceholderClient(c)) return 'Onbekende klant';
+  return clientFullName(c);
+}
+function agendaBlockServiceLabel(a) {
+  const notes = (a.notes || '').trim();
+  const summary = appointmentSummary(a);
+  if (notes && notes !== 'Elim v2 import') {
+    if (/^1 × Afspraak$/i.test(summary) || isAgendaPersonalBlock(a)) {
+      return `Afspraak ${notes}`;
+    }
+  }
+  return summary;
 }
 function agendaVisualDurationMins(a, dateISO) {
   const raw = appointmentDurationMins(a) || 30;
   const start = timeToMinutes(a.time);
   const close = timeToMinutes(DB.settings.closeTime || '18:00');
   const untilClose = Math.max(5, close - start);
-  if (isAgendaBlockAppointment(a)) return Math.min(40, untilClose);
+  if (isAgendaBlockAppointment(a)) return Math.min(45, untilClose);
   return Math.min(raw, untilClose);
 }
 function getAgendaSlotRange(weekDates, appsByDay, mode) {
@@ -1530,9 +1585,10 @@ function renderAgenda() {
     const c = findClient(a.clientId);
     const durMins = appointmentDurationMins(a);
     const marker = isAgendaBlockAppointment(a);
-    return `<div class="app-block${marker ? ' app-block--marker' : ''}" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;min-height:0;height:${heightPx}px">
-          <div class="app-name">${escapeHtml(clientFullName(c))}</div>
-          <div class="app-service">${escapeHtml(appointmentSummary(a))}</div>
+    const blockH = marker ? Math.min(heightPx, 48) : heightPx;
+    return `<div class="app-block${marker ? ' app-block--marker' : ''}" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;min-height:0;height:${blockH}px;max-height:${marker ? blockH : 'none'}px">
+          <div class="app-name">${escapeHtml(agendaBlockClientLabel(a, c))}</div>
+          <div class="app-service">${escapeHtml(agendaBlockServiceLabel(a))}</div>
           ${durMins && !marker ? `<div class="app-dur">${durMins} min</div>` : ''}
           <div class="app-actions">
             ${a.status==='gepland' ? `<button class="app-btn complete" data-complete="${a.id}" title="Afronden">✓</button>` : ''}
