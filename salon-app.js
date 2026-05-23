@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v33 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v33';
+console.log('%c[Salon Beheer] salon-app.js v34 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v34';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -1566,15 +1566,30 @@ function agendaBlockClientLabel(a, c) {
   if (isAgendaFullDayBlock(a, a.date)) return `${a.time}: ${name}`;
   return name;
 }
-function agendaBlockServiceLabel(a) {
+function isGenericPersonalLabel(text) {
+  const s = (text || '').trim().toLowerCase();
+  return !s || s === 'afspraak' || s.includes('eigen afspraak') || s.includes('overige eigen');
+}
+/** Notitie onder “Afspraak” (Angelie, pinksteren, …) — uit notes of savedName, zonder data te wissen. */
+function agendaPersonalNoteLine(a) {
   const notes = (a.notes || '').trim();
-  const summary = appointmentSummary(a);
-  if (notes && notes !== 'Elim v2 import') {
-    if (/^1 × Afspraak$/i.test(summary) || isAgendaPersonalBlock(a)) {
-      return notes.toLowerCase() === 'afspraak' ? 'Afspraak' : `Afspraak ${notes}`;
-    }
+  const sn = ((a.items || [])[0]?.savedName || '').trim();
+  if (notes && notes !== 'Elim v2 import' && !isGenericPersonalLabel(notes)) return notes;
+  if (sn && !isGenericPersonalLabel(sn)) return sn;
+  return '';
+}
+function agendaBlockServiceLabel(a) {
+  if (!isAgendaPersonalBlock(a)) return appointmentSummary(a);
+  const note = agendaPersonalNoteLine(a);
+  return note ? `Afspraak ${note}` : 'Afspraak';
+}
+function agendaBlockServiceHtml(a, fullDay, personal) {
+  if (!fullDay && !personal) return escapeHtml(agendaBlockServiceLabel(a));
+  const note = agendaPersonalNoteLine(a);
+  if (note) {
+    return `<span class="app-service-label">Afspraak</span><em class="app-service-note">${escapeHtml(note)}</em>`;
   }
-  return summary;
+  return '<span class="app-service-label">Afspraak</span>';
 }
 function agendaVisualDurationMins(a, dateISO, gridEndMin) {
   const raw = appointmentDurationMins(a) || 30;
@@ -1696,10 +1711,7 @@ function renderAgenda() {
     const fullDay = isAgendaFullDayBlock(a, dateISO);
     const personal = isAgendaPersonalBlock(a) && !fullDay;
     const cls = fullDay ? ' app-block--fullday' : (personal ? ' app-block--personal' : '');
-    const serviceLabel = agendaBlockServiceLabel(a);
-    const serviceHtml = (fullDay || personal) && serviceLabel.startsWith('Afspraak ')
-      ? `Afspraak <em>${escapeHtml(serviceLabel.slice(8))}</em>`
-      : escapeHtml(serviceLabel);
+    const serviceHtml = agendaBlockServiceHtml(a, fullDay, personal);
     return `<div class="app-block${cls}" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;height:${heightPx}px;min-height:${Math.max(heightPx, personal ? 36 : 24)}px">
           <div class="app-name">${escapeHtml(agendaBlockClientLabel(a, c))}</div>
           <div class="app-service">${serviceHtml}</div>
@@ -3392,12 +3404,32 @@ function openProductModal(p, defaultCat) {
 /* =========================================================
    AFSPRAAK BEHEREN (groot modal bij klik op agenda-blok)
    ========================================================= */
+function getClientRescheduleAppt(clientId) {
+  const today = todayISO();
+  const apps = (DB.appointments || [])
+    .filter(a => a.clientId === clientId && a.status !== 'geannuleerd' && a.status !== 'verwijderd')
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  return apps.find(a => a.date >= today) || apps[apps.length - 1] || null;
+}
 function openAppointmentDetail(id) {
   const a = DB.appointments.find(x => x.id === id);
   if (!a) return;
   currentApptId = id;
   showView('afspraak-detail');
   renderAppointmentDetail();
+}
+function openAppointmentReschedule(id) {
+  if (!id) return showToast('Geen afspraak geselecteerd');
+  currentApptTab = 'tijden';
+  openAppointmentDetail(id);
+}
+function focusAppointmentTijdenTab() {
+  requestAnimationFrame(() => {
+    document.querySelector('.appt-modal-tab[data-modal-tab="tijden"]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const panel = document.getElementById('mtab-tijden');
+    if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('#apptDate2')?.focus();
+  });
 }
 
 let currentApptId = null;
@@ -3620,7 +3652,7 @@ function renderAppointmentDetail() {
   $('#sideAfrekenen').addEventListener('click', () => openAfrekenen(id));
   $('#sideKopie').addEventListener('click',     () => openKopieModal(id));
   $('#sideAfspraakProducten').addEventListener('click', () => { if (c) openKlantAfspraken(c.id); });
-  $('#sideVerplaatsen').addEventListener('click', () => { currentApptTab='tijden'; renderAppointmentDetail(); });
+  $('#sideVerplaatsen').addEventListener('click', () => openAppointmentReschedule(id));
   $('#sideFactuur').addEventListener('click', () => openFactuurModal(id));
   $('#sideBericht').addEventListener('click', () => openBerichtModal(c, a));
   $('#sideDelete2').addEventListener('click',   doDelete);
@@ -3648,6 +3680,8 @@ function renderAppointmentDetail() {
     openMailto(c.email, subject, body);
   });
   $('#meerDelete')?.addEventListener('click', doDelete);
+
+  if (currentApptTab === 'tijden') focusAppointmentTijdenTab();
 }
 
 function weekdayName(iso) {
@@ -6099,11 +6133,15 @@ function renderKlantdossier() {
   });
 
   // Sidebar quick actions
-  const lastAppt = (DB.appointments||[]).filter(a=>a.clientId===c.id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time))[0];
+  const lastAppt = getClientRescheduleAppt(c.id);
   $('#dosAfrekenen').addEventListener('click', () => lastAppt ? openAfrekenen(lastAppt.id) : showToast('Nog geen afspraak'));
   $('#dosKopie').addEventListener('click',     () => lastAppt ? openKopieModal(lastAppt.id) : showToast('Nog geen afspraak'));
   $('#dosAfspraken').addEventListener('click', () => openKlantAfspraken(c.id));
-  $('#dosVerplaatsen').addEventListener('click', () => lastAppt ? (openAppointmentDetail(lastAppt.id)) : showToast('Nog geen afspraak'));
+  $('#dosVerplaatsen').addEventListener('click', () => {
+    const appt = getClientRescheduleAppt(c.id);
+    if (!appt) return showToast('Nog geen afspraak');
+    openAppointmentReschedule(appt.id);
+  });
   $('#dosFactuur').addEventListener('click',   () => lastAppt ? openFactuurModal(lastAppt.id) : showToast('Nog geen afspraak'));
   $('#dosBericht').addEventListener('click',   () => openBerichtModal(c, lastAppt));
   $('#dosMeer').addEventListener('click',      () => openVerzondenModal(c));
@@ -6283,10 +6321,17 @@ function renderKlantAfspraken() {
   $('#kaExcel').addEventListener('click', () => exportKlantAfsprakenCsv(c, rows, true));
 
   const lastAppt = allAppts[0];
+  const rescheduleAppt = () => {
+    const target = (currentApptId && allAppts.some(a => a.id === currentApptId))
+      ? currentApptId
+      : getClientRescheduleAppt(c.id)?.id;
+    if (!target) return showToast('Nog geen afspraak');
+    openAppointmentReschedule(target);
+  };
   $('#kaAfrekenen').addEventListener('click', () => lastAppt ? openAfrekenen(lastAppt.id) : showToast('Nog geen afspraak'));
   $('#kaKopie').addEventListener('click',     () => lastAppt ? openKopieModal(lastAppt.id) : showToast('Nog geen afspraak'));
   $('#kaAfspraken').addEventListener('click', () => renderKlantAfspraken());
-  $('#kaVerplaatsen').addEventListener('click', () => lastAppt ? openAppointmentDetail(lastAppt.id) : showToast('Nog geen afspraak'));
+  $('#kaVerplaatsen').addEventListener('click', rescheduleAppt);
   $('#kaFactuur').addEventListener('click',   () => lastAppt ? openFactuurModal(lastAppt.id) : showToast('Nog geen afspraak'));
   $('#kaBericht').addEventListener('click',   () => openBerichtModal(c, lastAppt));
   $('#kaMeer').addEventListener('click',      () => openVerzondenModal(c));

@@ -1094,9 +1094,11 @@ body.kopie-placing .agenda-day-apps .app-block {
     overflow: hidden;
   }
   .agenda-day-apps .app-name,
-  .agenda-day-apps .app-service {
+  .agenda-day-apps .app-service,
+  .agenda-day-apps .app-service-label,
+  .agenda-day-apps .app-service-note {
     white-space: normal;
-    overflow: hidden;
+    overflow: visible;
     word-break: break-word;
     line-height: 1.15;
   }
@@ -1294,7 +1296,9 @@ body.kopie-placing .agenda-day-apps .app-block {
   box-shadow: 0 1px 0 rgba(0,0,0,0.04);
 }
 .app-block .app-name { flex-shrink: 0; }
-.app-block .app-service { flex: 1; min-height: 0; overflow: hidden; text-overflow: ellipsis; }
+.app-block .app-service { flex: 1; min-height: 0; overflow: hidden; }
+.app-block .app-service-label { display: block; line-height: 1.2; }
+.app-block .app-service-note { display: block; font-style: italic; color: var(--muted); line-height: 1.2; margin-top: 1px; }
 .app-time  { font-weight: 600; color: var(--text); font-size: 11px; }
 .app-name  { font-weight: 600; color: var(--accent-dark); }
 .app-service { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -1658,6 +1662,7 @@ body.kopie-placing .agenda-day-apps .app-block {
   width: 100%;
   text-align: left;
   padding: 10px 14px;
+  min-height: 44px;
   margin-bottom: 6px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1665,6 +1670,8 @@ body.kopie-placing .agenda-day-apps .app-block {
   font-size: 13px;
   cursor: pointer;
   font-family: inherit;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .appt-side-btn:hover { background: var(--bg); border-color: var(--accent); }
 .appt-side-btn.danger { color: var(--red); border-color: #f0c9c5; }
