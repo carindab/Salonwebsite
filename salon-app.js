@@ -165,9 +165,11 @@ function defaultData() {
       address: 'Kerksingel 16',
       postal: '2951 GE',
       city: 'Alblasserdam',
-      phone: '078 69 11 113',
+      phone: '078 691 1113',
       email: 'eliminstituut@gmail.com',
-      website: 'https://agenda.eliminstituut.nl',
+      website: 'www.eliminstituut.nl',
+      contactName: 'Carinda Brand',
+      salonMobile: '06 13619209',
       kvk: '',
       btwNummer: 'NL24RABO0123949521',
       iban: '',
@@ -294,6 +296,7 @@ function applyDataDefaults(parsed) {
     parsed.productCategories = def.productCategories;
   }
   migrateSettingsAnbos(parsed.settings, def);
+  migrateMessageTemplates(parsed);
   if (parsed.settings) {
     Object.keys(def.settings).forEach(k => {
       if (parsed.settings[k] === undefined) parsed.settings[k] = def.settings[k];
@@ -6768,15 +6771,71 @@ function defaultIntakeQuestions() { return [
 /* =========================================================
    E-MAIL TEMPLATES (default)
    ========================================================= */
+function clientMailGreetingName(c) {
+  if (!c) return '';
+  const voor = String(c.dossier?.tussenvoegsel || '').trim();
+  return [c.firstName, voor, c.lastName].map(p => String(p || '').trim()).filter(Boolean).join(' ');
+}
+
+function appointmentMailBodyTemplate() {
+  return `Beste {klant_aanhef},
+
+Via deze e-mail willen wij u attenderen op de volgende afspraak:
+
+Datum:\t{datum}
+Van:\t{vantijd}
+Tot:\t{tottijd}
+
+
+Vriendelijke groet,
+
+{salon_contact_naam}
+{salon}
+{salon_adres}
+{salon_postcode} {salon_plaats}
+Tel: {salon_telefoon}
+Mobiel: {salon_mobiel}
+{website_kort}`;
+}
+
+function migrateMessageTemplates(parsed) {
+  const defs = defaultMessageTemplates();
+  if (!parsed.messageTemplates || !Array.isArray(parsed.messageTemplates)) {
+    parsed.messageTemplates = defs;
+    return;
+  }
+  const newBody = appointmentMailBodyTemplate();
+  const oldMarkers = ['Dit is een vriendelijke herinnering', 'Wij zien u graag!', 'Hierbij bevestigen wij uw afspraak'];
+  ['appt_reminder', 'appt_confirmation'].forEach(key => {
+    const tpl = parsed.messageTemplates.find(t => t.key === key);
+    const def = defs.find(t => t.key === key);
+    if (!tpl || !def) return;
+    const body = tpl.body || '';
+    if (oldMarkers.some(m => body.includes(m)) || body.includes('Met vriendelijke groet,\n{salon}')) {
+      tpl.body = newBody;
+      if (key === 'appt_reminder') {
+        tpl.subject = def.subject;
+        tpl.name = def.name;
+      }
+    }
+  });
+  defs.forEach(def => {
+    if (!parsed.messageTemplates.find(t => t.key === def.key)) {
+      parsed.messageTemplates.push({ ...def });
+    }
+  });
+}
+
 function defaultMessageTemplates() {
-  const tk = '\n\nMet vriendelijke groet,\n{salon}';
+  const mailBody = appointmentMailBodyTemplate();
+  const tk = '\n\nVriendelijke groet,\n\n{salon_contact_naam}\n{salon}';
   return [
     {
       id: 'booking_thanks',
       key: 'booking_thanks',
       name: 'Bedankt voor uw reservering bij {salon}',
       subject: 'Bedankt voor uw reservering bij {salon}',
-      body: 'Beste {voornaam},\n\nHartelijk dank voor uw reservering bij {salon}. Wij zien u graag op {datum} om {tijd} voor: {behandeling}.\n\nMocht u verhinderd zijn, geef het ons dan minstens 24 uur van tevoren door.' + tk,
+      body: 'Beste {klant_aanhef},\n\nHartelijk dank voor uw reservering bij {salon}. Wij zien u graag op {datum} om {tijd} voor: {behandeling}.\n\nMocht u verhinderd zijn, geef het ons dan minstens 24 uur van tevoren door.\n\nVriendelijke groet,\n\n{salon_contact_naam}\n{salon}',
       bcc: true
     },
     {
@@ -6784,7 +6843,7 @@ function defaultMessageTemplates() {
       key: 'appt_confirmation',
       name: 'Bevestiging van uw afspraak bij {salon}',
       subject: 'Bevestiging van uw afspraak bij {salon}',
-      body: 'Beste {voornaam},\n\nHierbij bevestigen wij uw afspraak op {datum} om {tijd} voor:\n{behandeling}\n\nAdres:\n{salon}\n{salon_adres}\n{salon_postcode} {salon_plaats}' + tk,
+      body: mailBody,
       bcc: true
     },
     {
@@ -6792,7 +6851,7 @@ function defaultMessageTemplates() {
       key: 'appt_reminder',
       name: 'Herinnering aan uw afspraak bij {salon}',
       subject: 'Herinnering aan uw afspraak bij {salon}',
-      body: 'Beste {voornaam},\n\nDit is een vriendelijke herinnering aan uw afspraak op {datum} om {tijd}: {behandeling}.\n\nWij zien u graag!' + tk,
+      body: mailBody,
       bcc: true
     },
     {
@@ -6897,25 +6956,34 @@ function getTemplate(key) {
 
 function fillTokens(text, ctx) {
   const s = DB.settings || {};
+  const websiteKort = String(s.website || '').replace(/^https?:\/\//i, '').replace(/\/$/, '');
   const tokens = {
     salon:           s.salonName || 'Salon',
+    company_name:    s.salonName || 'Salon',
     salon_adres:     s.address || '',
     salon_postcode:  s.postal || '',
     salon_plaats:    s.city || '',
     salon_telefoon:  s.phone || '',
+    salon_mobiel:    s.salonMobile || '',
+    salon_contact_naam: s.contactName || '',
     salon_email:     s.email || '',
     website:         s.website || '',
+    website_kort:    websiteKort,
     kvk:             s.kvk || '',
     btw_nummer:      s.btwNummer || '',
     iban:            s.iban || '',
     voornaam:        ctx?.client?.firstName || '',
+    voorvoegsel:     ctx?.client?.dossier?.tussenvoegsel || '',
     achternaam:      ctx?.client?.lastName || '',
+    klant_aanhef:    ctx?.client ? clientMailGreetingName(ctx.client) : '',
     volledige_naam:  ctx?.client ? clientFullName(ctx.client) : '',
     email:           ctx?.client?.email || '',
     datum:           ctx?.appointment ? fmtDate(ctx.appointment.date) : (ctx?.datum || ''),
     datum_lang:      ctx?.datum_lang || (ctx?.appointment ? `${weekdayName(ctx.appointment.date)} ${fmtDate(ctx.appointment.date)}` : ''),
     tijd:            ctx?.tijd != null && ctx.tijd !== '' ? ctx.tijd : (ctx?.appointment?.time || ''),
+    vantijd:         ctx?.vantijd != null && ctx.vantijd !== '' ? ctx.vantijd : (ctx?.appointment?.time || ''),
     tijd_tot:        ctx?.tijd_tot != null && ctx.tijd_tot !== '' ? ctx.tijd_tot : (ctx?.appointment ? getAppointmentEndHM(ctx.appointment) : ''),
+    tottijd:         ctx?.tottijd != null && ctx.tottijd !== '' ? ctx.tottijd : (ctx?.appointment ? getAppointmentEndHM(ctx.appointment) : ''),
     behandeling:     ctx?.appointment ? appointmentSummary(ctx.appointment) : (ctx?.behandeling || ''),
     totaal:          ctx?.totaal || '',
     betaalwijze:     ctx?.betaalwijze || '',

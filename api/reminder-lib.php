@@ -113,14 +113,63 @@ function salon_client_reminder_hours(array $settings, ?array $client): int
     return $n > 0 ? $n : 24;
 }
 
-function salon_fill_tokens(string $text, array $settings, ?array $client, ?array $appointment): string
+function salon_appointment_end_time(array $appointment, array $treatments): string
+{
+    $time = (string) ($appointment['time'] ?? '10:00');
+    $parts = explode(':', $time);
+    $h = (int) ($parts[0] ?? 10);
+    $m = (int) ($parts[1] ?? 0);
+    $totalMin = $h * 60 + $m;
+    $added = 0;
+    $index = [];
+    foreach ($treatments as $t) {
+        if (is_array($t) && !empty($t['id'])) {
+            $index[(string) $t['id']] = $t;
+        }
+    }
+    foreach ($appointment['items'] ?? [] as $it) {
+        if (!is_array($it) || ($it['kind'] ?? '') !== 'treatment') {
+            continue;
+        }
+        $refId = (string) ($it['refId'] ?? '');
+        if ($refId !== '' && isset($index[$refId])) {
+            $dur = (int) ($index[$refId]['duration'] ?? 0);
+            $totalMin += $dur;
+            $added += $dur;
+        }
+    }
+    if ($added === 0) {
+        $totalMin += 5;
+    }
+    $eH = intdiv($totalMin, 60) % 24;
+    $eM = $totalMin % 60;
+    return sprintf('%02d:%02d', $eH, $eM);
+}
+
+function salon_client_mail_greeting_name(?array $client): string
+{
+    if (!$client) {
+        return '';
+    }
+    $voor = trim((string) ($client['dossier']['tussenvoegsel'] ?? ''));
+    $parts = array_values(array_filter([
+        trim((string) ($client['firstName'] ?? '')),
+        $voor,
+        trim((string) ($client['lastName'] ?? '')),
+    ], static fn ($p) => $p !== ''));
+    return implode(' ', $parts);
+}
+
+function salon_fill_tokens(string $text, array $settings, ?array $client, ?array $appointment, array $treatments = []): string
 {
     $salon = (string) ($settings['salonName'] ?? 'Elim Instituut');
     $voornaam = (string) ($client['firstName'] ?? '');
+    $voorvoegsel = trim((string) ($client['dossier']['tussenvoegsel'] ?? ''));
     $achternaam = (string) ($client['lastName'] ?? '');
-    $volledige = trim($voornaam . ' ' . $achternaam) ?: '?';
+    $volledige = salon_client_mail_greeting_name($client) ?: '?';
     $datum = '';
     $tijd = '';
+    $tijdTot = '';
     $behandeling = '';
     if ($appointment) {
         $parts = explode('-', (string) ($appointment['date'] ?? ''));
@@ -128,6 +177,7 @@ function salon_fill_tokens(string $text, array $settings, ?array $client, ?array
             $datum = $parts[2] . '-' . $parts[1] . '-' . $parts[0];
         }
         $tijd = (string) ($appointment['time'] ?? '');
+        $tijdTot = salon_appointment_end_time($appointment, $treatments);
         $names = [];
         foreach ($appointment['items'] ?? [] as $it) {
             if (!is_array($it)) {
@@ -137,20 +187,32 @@ function salon_fill_tokens(string $text, array $settings, ?array $client, ?array
         }
         $behandeling = implode(', ', $names);
     }
+    $website = (string) ($settings['website'] ?? '');
+    $websiteKort = preg_replace('#^https?://#i', '', $website);
+    $websiteKort = rtrim((string) $websiteKort, '/');
     $tokens = [
         'salon' => $salon,
+        'company_name' => $salon,
         'salon_adres' => (string) ($settings['address'] ?? ''),
         'salon_postcode' => (string) ($settings['postal'] ?? ''),
         'salon_plaats' => (string) ($settings['city'] ?? ''),
         'salon_telefoon' => (string) ($settings['phone'] ?? ''),
+        'salon_mobiel' => (string) ($settings['salonMobile'] ?? ''),
+        'salon_contact_naam' => (string) ($settings['contactName'] ?? 'Carinda Brand'),
         'salon_email' => (string) ($settings['email'] ?? ''),
-        'website' => (string) ($settings['website'] ?? ''),
+        'website' => $website,
+        'website_kort' => $websiteKort,
         'voornaam' => $voornaam,
+        'voorvoegsel' => $voorvoegsel,
         'achternaam' => $achternaam,
+        'klant_aanhef' => $volledige,
         'volledige_naam' => $volledige,
         'email' => (string) ($client['email'] ?? ''),
         'datum' => $datum,
         'tijd' => $tijd,
+        'vantijd' => $tijd,
+        'tijd_tot' => $tijdTot,
+        'tottijd' => $tijdTot,
         'behandeling' => $behandeling,
     ];
     return preg_replace_callback('/\{([a-z_]+)\}/', static function ($m) use ($tokens) {
@@ -173,11 +235,27 @@ function salon_get_message_template(array $meta, string $key): ?array
     return null;
 }
 
+function salon_get_reminder_template(array $meta): ?array
+{
+    $tpl = salon_get_message_template($meta, 'appt_reminder');
+    if ($tpl === null) {
+        return salon_default_reminder_template();
+    }
+    $body = (string) ($tpl['body'] ?? '');
+    $oldMarkers = ['Dit is een vriendelijke herinnering', 'Wij zien u graag!', 'Met vriendelijke groet,\n{salon}'];
+    foreach ($oldMarkers as $marker) {
+        if (str_contains($body, $marker)) {
+            return salon_default_reminder_template();
+        }
+    }
+    return $tpl;
+}
+
 function salon_default_reminder_template(): array
 {
     return [
         'subject' => 'Herinnering aan uw afspraak bij {salon}',
-        'body' => "Beste {voornaam},\n\nDit is een vriendelijke herinnering aan uw afspraak op {datum} om {tijd}: {behandeling}.\n\nWij zien u graag!\n\nMet vriendelijke groet,\n{salon}",
+        'body' => "Beste {klant_aanhef},\n\nVia deze e-mail willen wij u attenderen op de volgende afspraak:\n\nDatum:\t{datum}\nVan:\t{vantijd}\nTot:\t{tottijd}\n\n\nVriendelijke groet,\n\n{salon_contact_naam}\n{salon}\n{salon_adres}\n{salon_postcode} {salon_plaats}\nTel: {salon_telefoon}\nMobiel: {salon_mobiel}\n{website_kort}",
     ];
 }
 
@@ -203,7 +281,8 @@ function salon_process_reminders(PDO $pdo, bool $dryRun = false): array
 
     $clients = salon_load_clients_index($pdo);
     $appointments = salon_load_upcoming_appointments($pdo, $from, $to);
-    $tpl = salon_get_message_template($meta, 'appt_reminder') ?? salon_default_reminder_template();
+    $tpl = salon_get_reminder_template($meta);
+    $treatments = is_array($meta['treatments'] ?? null) ? $meta['treatments'] : [];
 
     $sent = 0;
     $skipped = 0;
@@ -259,8 +338,8 @@ function salon_process_reminders(PDO $pdo, bool $dryRun = false): array
             continue;
         }
 
-        $subject = salon_fill_tokens((string) ($tpl['subject'] ?? ''), $settings, $client, $a);
-        $body = salon_fill_tokens((string) ($tpl['body'] ?? ''), $settings, $client, $a);
+        $subject = salon_fill_tokens((string) ($tpl['subject'] ?? ''), $settings, $client, $a, $treatments);
+        $body = salon_fill_tokens((string) ($tpl['body'] ?? ''), $settings, $client, $a, $treatments);
         $bcc = !empty($settings['bccCopy']) && !empty($settings['email']) ? (string) $settings['email'] : null;
 
         if ($dryRun) {
