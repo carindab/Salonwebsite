@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v37 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v37';
-const BUILD_LABEL = '27 mei 2026 · rapportage + omzetfix';
+console.log('%c[Salon Beheer] salon-app.js v38 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v38';
+const BUILD_LABEL = '27 mei 2026 · omzet 2025 fix';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -3420,36 +3420,36 @@ function bootstrapSalonFromHostedSeed(force) {
 /** Zet orderTotal (Salonware orderprijs) op geïmporteerde afspraken — corrigeert omzet 2025 e.d. */
 async function patchAppointmentOrderTotalsFromSeed() {
   if (location.protocol === 'file:') return false;
+  let byOrder = null;
+  const base = getSalonApiBase();
   try {
-    const res = await fetch(`salon-seed.json?v=${encodeURIComponent(SALON_SEED_VERSION)}`, { cache: 'no-store' });
-    if (!res.ok) return false;
-    const seed = await res.json();
-    if (!seed?.appointments?.length) return false;
-    const byOrder = new Map();
-    seed.appointments.forEach(a => {
-      if (a.importOrderId != null && a.orderTotal != null) {
-        byOrder.set(String(a.importOrderId), Number(a.orderTotal));
-      }
-    });
-    if (!byOrder.size) return false;
-    let patched = 0;
-    (DB.appointments || []).forEach(a => {
-      if (a.importOrderId == null) return;
-      const ot = byOrder.get(String(a.importOrderId));
-      if (ot == null || a.orderTotal === ot) return;
-      a.orderTotal = ot;
-      patched++;
-    });
-    if (patched) {
-      safeSaveData(DB, { quiet: true });
-      console.log('[Salon] orderTotal bijgewerkt op', patched, 'afspraken');
-      if (serverSync.enabled) await saveDatabaseToServer({ quiet: true });
+    if (base && hasServerAccess()) {
+      const res = await salonApiFetch(`${base}/order-totals.php`, { cache: 'no-store' });
+      const data = await res.json();
+      if (data.ok && data.map) byOrder = data.map;
     }
-    return patched > 0;
   } catch (e) {
-    console.warn('[Salon] orderTotal patch:', e && e.message);
-    return false;
+    console.warn('[Salon] order-totals API:', e && e.message);
   }
+  if (!byOrder) return false;
+
+  let patched = 0;
+  (DB.appointments || []).forEach(a => {
+    const key = a.importOrderId != null
+      ? String(a.importOrderId)
+      : (String(a.id || '').match(/^a_v2_(\d+)$/) || [])[1];
+    if (!key) return;
+    const ot = byOrder[key];
+    if (ot == null || a.orderTotal === ot) return;
+    a.orderTotal = Number(ot);
+    patched++;
+  });
+  if (patched) {
+    safeSaveData(DB, { quiet: true });
+    console.log('[Salon] orderTotal bijgewerkt op', patched, 'afspraken');
+    if (serverSync.enabled) await saveDatabaseToServer({ quiet: true });
+  }
+  return patched > 0;
 }
 
 function normalizeDate(s) {

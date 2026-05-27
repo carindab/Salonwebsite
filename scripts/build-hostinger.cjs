@@ -37,6 +37,11 @@ function copyDir(src, dest) {
 rmrf(OUT);
 fs.mkdirSync(OUT, { recursive: true });
 
+require("child_process").execSync("node scripts/build-order-totals.cjs", {
+  cwd: ROOT,
+  stdio: "inherit",
+});
+
 for (const f of FILES) {
   const src = path.join(ROOT, f);
   if (fs.existsSync(src)) copyFile(src, path.join(OUT, f));

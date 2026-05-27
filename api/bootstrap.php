@@ -190,6 +190,74 @@ function salon_replace_appointments(PDO $pdo, array $appointments): void
     }
 }
 
+function salon_order_totals_path(): string
+{
+    return __DIR__ . '/order-totals.json';
+}
+
+/** @return array<string, float> order_id → Salonware orderprijs */
+function salon_order_totals_map(): array
+{
+    static $map = null;
+    if ($map !== null) {
+        return $map;
+    }
+    $path = salon_order_totals_path();
+    if (!is_file($path)) {
+        $map = [];
+        return $map;
+    }
+    $data = json_decode(file_get_contents($path) ?: '', true);
+    $map = is_array($data) ? $data : [];
+    return $map;
+}
+
+function salon_appointment_order_key(array $a): ?string
+{
+    if (isset($a['importOrderId']) && $a['importOrderId'] !== '') {
+        return (string) $a['importOrderId'];
+    }
+    $id = (string) ($a['id'] ?? '');
+    if (preg_match('/^a_v2_(\d+)$/', $id, $m)) {
+        return $m[1];
+    }
+    return null;
+}
+
+/** Salonware-rapportage: orderprijs op geïmporteerde afspraken (omzet 2025 e.d.). */
+function salon_patch_appointment_order_totals(array $appointments): array
+{
+    $map = salon_order_totals_map();
+    if ($map === []) {
+        return $appointments;
+    }
+    foreach ($appointments as &$a) {
+        if (!is_array($a)) {
+            continue;
+        }
+        $key = salon_appointment_order_key($a);
+        if ($key === null || !array_key_exists($key, $map)) {
+            continue;
+        }
+        $a['orderTotal'] = (float) $map[$key];
+    }
+    unset($a);
+    return $appointments;
+}
+
+function salon_load_cache_stale(int $revision): bool
+{
+    $path = salon_load_cache_path($revision);
+    if (!is_file($path)) {
+        return true;
+    }
+    $otPath = salon_order_totals_path();
+    if (is_file($otPath) && filemtime($otPath) > filemtime($path)) {
+        return true;
+    }
+    return false;
+}
+
 function salon_load_clients(PDO $pdo): array
 {
     $clients = [];
@@ -213,7 +281,7 @@ function salon_load_appointments(PDO $pdo): array
             $appointments[] = $decoded;
         }
     }
-    return $appointments;
+    return salon_patch_appointment_order_totals($appointments);
 }
 
 function salon_counts(PDO $pdo): array
@@ -325,7 +393,7 @@ function salon_refresh_load_cache(PDO $pdo): void
 function salon_serve_load_cache(int $revision): bool
 {
     $path = salon_load_cache_path($revision);
-    if (!is_file($path) || filesize($path) < 32) {
+    if (!is_file($path) || filesize($path) < 32 || salon_load_cache_stale($revision)) {
         return false;
     }
     header('Content-Type: application/json; charset=utf-8');
@@ -367,5 +435,5 @@ function salon_load_appointments_chunk(PDO $pdo, int $offset, int $limit): array
             $appointments[] = $decoded;
         }
     }
-    return $appointments;
+    return salon_patch_appointment_order_totals($appointments);
 }
