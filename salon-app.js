@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v42 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v42';
-const BUILD_LABEL = '27 mei 2026 · mail SSL fix';
+console.log('%c[Salon Beheer] salon-app.js v71 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v71';
+const BUILD_LABEL = '27 mei 2026 · factuur via Gmail';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -537,6 +537,20 @@ function updateVersionLabels() {
   if (loginLbl) loginLbl.textContent = label;
   if (appLbl) appLbl.textContent = label;
   initMobileSiteBar();
+  void checkServerRelease();
+}
+
+async function checkServerRelease() {
+  const base = getSalonApiBase();
+  if (!base) return;
+  try {
+    const res = await fetch(`${base}/version.php`, { cache: 'no-store' });
+    const data = await res.json();
+    if (!data.ok || !data.release) return;
+    if (data.release !== APP_VERSION) {
+      showToast(`Nieuwe versie op server (${data.release}). Ververs: Cmd+Shift+R (Mac) of Ctrl+F5.`);
+    }
+  } catch (_) { /* offline */ }
 }
 
 function initMobileSiteBar() {
