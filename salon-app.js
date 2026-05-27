@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v71 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v71';
-const BUILD_LABEL = '27 mei 2026 · factuur via Gmail';
+console.log('%c[Salon Beheer] salon-app.js v72 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v72';
+const BUILD_LABEL = '27 mei 2026 · factuur als PDF';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -4247,6 +4247,50 @@ function buildFactuurHtmlDocument(a, c) {
   <body><div class="factuur-paper">${inner}</div></body></html>`;
 }
 
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      resolve(typeof dataUrl === 'string' ? dataUrl.split(',')[1] || '' : '');
+    };
+    reader.onerror = () => reject(reader.error || new Error('PDF lezen mislukt'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** Factuur als PDF (voor e-mailbijlage). */
+async function buildFactuurPdfBlob(a, c) {
+  if (typeof html2pdf !== 'function') {
+    throw new Error('PDF-bibliotheek niet geladen — ververs de pagina (Cmd+Shift+R)');
+  }
+  const inner = a.invoiceHtml || buildDefaultInvoiceHTML(a, c, DB.settings);
+  const host = document.createElement('div');
+  host.setAttribute('aria-hidden', 'true');
+  host.style.cssText = 'position:fixed;left:-99999px;top:0;width:794px;background:#fff;z-index:-1;';
+  const style = document.createElement('style');
+  style.textContent = getInvoiceDocumentCSS();
+  host.appendChild(style);
+  const paper = document.createElement('div');
+  paper.className = 'factuur-paper';
+  paper.innerHTML = inner;
+  host.appendChild(paper);
+  document.body.appendChild(host);
+  try {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return await html2pdf().set({
+      margin: 10,
+      filename: `Factuur-${a.invoiceNumber || 'factuur'}.pdf`,
+      image: { type: 'jpeg', quality: 0.95 },
+      html2canvas: { scale: 2, useCORS: true, logging: false },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
+    }).from(paper).output('blob');
+  } finally {
+    host.remove();
+  }
+}
+
 function downloadFactuurHtmlBijlage(apptId) {
   const a = DB.appointments.find(x => x.id === apptId);
   if (!a) return;
@@ -4381,6 +4425,9 @@ function renderFactuurPage() {
           showToast('Gmail nog niet gekoppeld op de server — open setup-mail.php en koppel opnieuw.');
           return;
         }
+        showToast('Factuur als PDF maken…');
+        const pdfBlob = await buildFactuurPdfBlob(a, c);
+        const attachmentPdfBase64 = await blobToBase64(pdfBlob);
         const sendRes = await salonApiFetch(`${base}/send-invoice.php`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4389,8 +4436,8 @@ function renderFactuurPage() {
             subject: m.subject,
             body: m.body,
             bcc,
-            filename: `Factuur-${a.invoiceNumber}.html`,
-            attachmentHtml: buildFactuurHtmlDocument(a, c),
+            filename: `Factuur-${a.invoiceNumber}.pdf`,
+            attachmentPdfBase64,
           }),
         });
         const send = await sendRes.json().catch(() => ({}));

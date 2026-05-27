@@ -27,8 +27,9 @@ if (!is_array($payload)) {
 $to = trim((string) ($payload['to'] ?? ''));
 $subject = trim((string) ($payload['subject'] ?? ''));
 $body = (string) ($payload['body'] ?? '');
+$attachmentPdfBase64 = (string) ($payload['attachmentPdfBase64'] ?? '');
 $attachmentHtml = (string) ($payload['attachmentHtml'] ?? '');
-$filename = trim((string) ($payload['filename'] ?? 'Factuur.html'));
+$filename = trim((string) ($payload['filename'] ?? 'Factuur.pdf'));
 $bcc = trim((string) ($payload['bcc'] ?? ''));
 
 if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
@@ -37,23 +38,43 @@ if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
 if ($subject === '') {
     salon_json_out(['ok' => false, 'error' => 'Onderwerp ontbreekt'], 400);
 }
-if ($attachmentHtml === '') {
+
+$attachments = [];
+
+if ($attachmentPdfBase64 !== '') {
+    $pdf = base64_decode($attachmentPdfBase64, true);
+    if ($pdf === false || $pdf === '') {
+        salon_json_out(['ok' => false, 'error' => 'PDF ongeldig'], 400);
+    }
+    if (!preg_match('/\.pdf$/i', $filename)) {
+        $filename = preg_replace('/\.html$/i', '', $filename) . '.pdf';
+    }
+    $attachments[] = [
+        'content' => $pdf,
+        'filename' => preg_replace('/[^\w\-. ]+/u', '_', $filename) ?: 'Factuur.pdf',
+        'mime' => 'application/pdf',
+    ];
+} elseif ($attachmentHtml !== '') {
+    if (!preg_match('/\.html$/i', $filename)) {
+        $filename .= '.html';
+    }
+    $attachments[] = [
+        'content' => $attachmentHtml,
+        'filename' => preg_replace('/[^\w\-. ]+/u', '_', $filename) ?: 'Factuur.html',
+        'mime' => 'text/html',
+    ];
+} else {
     salon_json_out(['ok' => false, 'error' => 'Factuur ontbreekt'], 400);
 }
-if (!preg_match('/\.html$/i', $filename)) {
-    $filename .= '.html';
-}
-$filename = preg_replace('/[^\w\-. ]+/u', '_', $filename) ?: 'Factuur.html';
-
-$attachments = [[
-    'content' => $attachmentHtml,
-    'filename' => $filename,
-    'mime' => 'text/html',
-]];
 
 $result = salon_smtp_send($to, $subject, $body, $bcc !== '' ? $bcc : null, $attachments);
 if (!$result['ok']) {
     salon_json_out(['ok' => false, 'error' => $result['error'] ?? 'Verzenden mislukt'], 502);
 }
 
-salon_json_out(['ok' => true, 'to' => $to, 'filename' => $filename]);
+salon_json_out([
+    'ok' => true,
+    'to' => $to,
+    'filename' => $attachments[0]['filename'],
+    'format' => str_ends_with(strtolower($attachments[0]['filename']), '.pdf') ? 'pdf' : 'html',
+]);

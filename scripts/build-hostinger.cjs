@@ -10,7 +10,7 @@ const ROOT = path.join(__dirname, "..");
 const OUT = path.join(ROOT, "dist");
 
 const FILES = ["index.html", "index.php", "salon-app.js", "styles.css", "salon-seed.json", ".htaccess", "VERSION"];
-const DIRS = ["api", "database"];
+const DIRS = ["api", "database", "lib"];
 
 function rmrf(dir) {
   if (!fs.existsSync(dir)) return;
