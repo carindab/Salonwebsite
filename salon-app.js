@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v39 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v39';
-const BUILD_LABEL = '27 mei 2026 · mobiel + mail';
+console.log('%c[Salon Beheer] salon-app.js v41 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v41';
+const BUILD_LABEL = '27 mei 2026 · herinneringen + mobiel';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -181,6 +181,9 @@ function defaultData() {
       // Factuurnummer-teller
       invoiceCounter: 10314,
       bccCopy: false,
+      /** Automatische e-mailherinnering ~24u van tevoren (server cron) */
+      remindersAutoEnabled: true,
+      defaultReminderHours: 24,
       /** Klantenlijst: lastName | firstName | importId (Salonware klant_id) */
       klantenSort: 'lastName',
     },
@@ -433,7 +436,18 @@ function safeSaveData(d, opts = {}) {
 function saveData(d, opts = {}) {
   invalidateAppointmentsIndex();
   safeSaveData(d, opts);
-  scheduleServerDatabaseSave();
+  if (opts.immediate && serverSync.enabled && hasServerAccess()) {
+    clearTimeout(serverSync.saveTimer);
+    void flushServerSave({ quiet: opts.quiet !== false });
+  } else {
+    scheduleServerDatabaseSave();
+  }
+}
+
+async function flushServerSave(opts = {}) {
+  clearTimeout(serverSync.saveTimer);
+  if (!serverSync.enabled || !hasServerAccess()) return false;
+  return saveDatabaseToServer(opts);
 }
 
 /* ---------- Hostinger MySQL sync (PHP API) ---------- */
@@ -2246,7 +2260,7 @@ function openAppointmentModal(existing) {
       $('#naDelete').addEventListener('click', () => {
         if (!confirm('Afspraak verwijderen?')) return;
         DB.appointments = DB.appointments.filter(x => x.id !== existing.id);
-        saveData(DB); closeModal(); renderAgenda(); showToast('Afspraak verwijderd');
+        saveData(DB, { immediate: true }); closeModal(); renderAgenda(); showToast('Afspraak verwijderd');
       });
     }
     $('#naSave').addEventListener('click', () => saveAppointment());
@@ -2264,11 +2278,11 @@ function openAppointmentModal(existing) {
       const idx = DB.appointments.findIndex(x => x.id === existing.id);
       if (idx>=0) DB.appointments[idx] = working;
     }
-    saveData(DB);
+    saveData(DB, { immediate: true, quiet: false });
     agendaCurrentDate = working.date;
     closeModal();
     renderAgenda();
-    showToast(isNew ? 'Afspraak ingepland ✓' : 'Afspraak bijgewerkt ✓');
+    showToast(isNew ? 'Afspraak opgeslagen op server ✓' : 'Afspraak bijgewerkt ✓');
 
     // Bevestigingsmail
     if (sendConfirm && c.email) {
@@ -3814,7 +3828,7 @@ function renderAppointmentDetail() {
               <h4>Tijden en reminder</h4>
               <div class="appt-field"><label>Datum:</label><div class="val"><input type="date" id="apptDate2" value="${a.date}" /></div></div>
               <div class="appt-field"><label>Starttijd:</label><div class="val"><input type="time" id="apptTime2" value="${a.time}" /></div></div>
-              <p style="margin-top:16px; font-size:13px; color:var(--muted);">Herinneringen worden niet automatisch verstuurd (lokale app).</p>
+              <p style="margin-top:16px; font-size:13px; color:var(--muted);">Herinneringen worden automatisch ~24 uur van tevoren per e-mail verstuurd (Gmail via server).</p>
               <button class="btn primary" id="saveApptTijden" style="margin-top:12px;">Tijden opslaan</button>
             </div>
           </div>
@@ -5694,6 +5708,24 @@ function renderAlgemeen() {
               <option value="even" ${!s.weekSchemaWorkOdd?'selected':''}>Even weeknummers (2, 4, 6…)</option>
             </select>
           </div>
+          <h3 class="dos-section-title">Automatische e-mailherinneringen</h3>
+          <div class="dos-row"><label>Herinneringen aan</label>
+            <select name="remindersAutoEnabled">
+              <option value="true"  ${s.remindersAutoEnabled !== false ? 'selected' : ''}>Ja — ~24 uur van tevoren</option>
+              <option value="false" ${s.remindersAutoEnabled === false ? 'selected' : ''}>Nee</option>
+            </select>
+          </div>
+          <div class="dos-row"><label>Standaard (uren van tevoren)</label>
+            <select name="defaultReminderHours">
+              <option value="24" ${Number(s.defaultReminderHours || 24) === 24 ? 'selected' : ''}>24 uur</option>
+              <option value="48" ${Number(s.defaultReminderHours) === 48 ? 'selected' : ''}>48 uur</option>
+            </select>
+          </div>
+          <p class="form-hint" style="margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.45;">
+            Afspraken die je op mobiel inplant worden direct op de server opgeslagen (MySQL). Je telefoon hoeft niet alles lokaal te bewaren.
+            <br>Gmail koppelen: <a href="/api/setup-mail.php?key=tijdelijk-installatie-wachtwoord" target="_blank" rel="noopener">setup-mail.php</a>
+            <span id="mailStatusHint"></span>
+          </p>
           <div style="margin-top:18px;">
             <button type="submit" class="btn primary">Opslaan</button>
           </div>
@@ -5711,11 +5743,23 @@ function renderAlgemeen() {
       seats:     Number(fd.get('seats'))||1,
       weekSchemaEnabled: fd.get('weekSchemaEnabled')==='true',
       weekSchemaWorkOdd: fd.get('weekSchemaWorkOdd')==='odd',
+      remindersAutoEnabled: fd.get('remindersAutoEnabled') === 'true',
+      defaultReminderHours: Number(fd.get('defaultReminderHours')) || 24,
     });
-    saveData(DB);
+    saveData(DB, { immediate: true });
     showToast('Instellingen opgeslagen');
     renderAgenda();
   });
+
+  void salonApiFetch(`${getSalonApiBase()}/mail-status.php`, { cache: 'no-store' })
+    .then(r => r.json())
+    .then(data => {
+      const hint = $('#mailStatusHint');
+      if (!hint) return;
+      hint.textContent = data.configured ? ' · Gmail gekoppeld ✓' : ' · Gmail nog niet gekoppeld';
+      hint.style.color = data.configured ? 'var(--accent-dark)' : '#a73f34';
+    })
+    .catch(() => {});
 }
 
 /* ---------- Data & backup ---------- */

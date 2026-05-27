@@ -53,3 +53,13 @@ CREATE TABLE IF NOT EXISTS salon_remember_tokens (
   KEY idx_user (user_id),
   KEY idx_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS salon_reminder_log (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  appointment_id VARCHAR(80) NOT NULL,
+  client_id VARCHAR(80) DEFAULT NULL,
+  reminder_type VARCHAR(32) NOT NULL DEFAULT '24h',
+  sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  recipient VARCHAR(255) NOT NULL,
+  UNIQUE KEY uq_appt_type (appointment_id, reminder_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -163,8 +163,28 @@ Je krijgt: **2404 klanten · 10613 afspraken**
 3. Herhaal op je **telefoon** (zelfde URL, zelfde API-sleutel)
 
 Vanaf nu:
-- Wijzigingen worden na 2 seconden automatisch opgeslagen in MySQL
-- Beide apparaten zien dezelfde data na verversen / opnieuw laden
+- Wijzigingen worden opgeslagen in **MySQL** (server) — ook vanaf mobiel direct bij nieuwe afspraken
+- Op mobiel wordt niet alles lokaal bewaard (te groot); data komt van de server
+- Beide apparaten zien dezelfde data na inloggen
+
+---
+
+## Stap 7 — Gmail koppelen (automatische herinneringen 24 uur van tevoren)
+
+1. Zet **2-stapsverificatie** aan op `eliminstituut@gmail.com`
+2. Maak een **App-wachtwoord** in Google (Beveiliging → App-wachtwoorden)
+3. Open:
+   ```
+   https://agenda.eliminstituut.nl/api/setup-mail.php?key=tijdelijk-installatie-wachtwoord
+   ```
+4. Vul Gmail + app-wachtwoord in → **Testmail sturen**
+5. In Hostinger **Cron Jobs** (elk uur):
+   ```
+   0 * * * * curl -s "https://agenda.eliminstituut.nl/api/send-reminders.php?key=JOUW_CRON_KEY"
+   ```
+   De cron-URL staat op het scherm na opslaan in setup-mail.
+
+Herinneringen gaan naar klanten met status **gepland** en een e-mailadres, ~24 uur voor de afspraak.
 
 ---
 
