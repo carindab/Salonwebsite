@@ -11,13 +11,13 @@ salon_prepare_api_runtime();
 
 try {
     $pdo = salon_pdo();
-    $revision = salon_get_revision($pdo);
-    salon_serve_load_cache($revision);
-
-    $payload = salon_build_load_payload($pdo);
-    salon_write_load_cache($pdo, $payload);
-    header('X-Salon-Cache: miss');
-    salon_json_out($payload);
+    salon_refresh_load_cache($pdo);
+    salon_json_out([
+        'ok' => true,
+        'message' => 'Load-cache opgebouwd',
+        'revision' => salon_get_revision($pdo),
+        'counts' => salon_counts($pdo),
+    ]);
 } catch (Throwable $e) {
     salon_json_out(['ok' => false, 'error' => $e->getMessage()], 500);
 }

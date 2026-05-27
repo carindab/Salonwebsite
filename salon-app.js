@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v35 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v35';
+console.log('%c[Salon Beheer] salon-app.js v36 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v36';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -447,6 +447,137 @@ function salonApiFetch(url, opts = {}) {
   });
 }
 
+function salonApiFetchWithTimeout(url, opts = {}, ms = 120000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, {
+    ...opts,
+    signal: ctrl.signal,
+    credentials: 'include',
+    headers: { ...salonApiHeaders(), ...(opts.headers || {}) },
+  }).finally(() => clearTimeout(timer));
+}
+
+function showLoadProgress(msg) {
+  const t = $('#toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.remove('hidden');
+}
+
+async function loadDatabaseFromServerChunked(opts = {}) {
+  const base = getSalonApiBase();
+  if (!base || !hasServerAccess()) return false;
+  try {
+    const metaRes = await salonApiFetchWithTimeout(`${base}/load-chunk.php?part=meta`, { cache: 'no-store' }, 60000);
+    const metaData = await metaRes.json();
+    if (!metaData.ok) throw new Error(metaData.error || 'Meta laden mislukt');
+
+    DB.clients = [];
+    DB.appointments = [];
+    const metaKeys = [
+      'settings', 'messageTemplates', 'intakeQuestions', 'treatmentCategories', 'treatments',
+      'productCategories', 'products', 'packages', 'cadeaubonnen', 'autoFinalizeLog', 'burcuAkcayDemo',
+    ];
+    metaKeys.forEach(k => {
+      if (metaData.meta?.[k] !== undefined) DB[k] = metaData.meta[k];
+    });
+    serverSync.revision = Number(metaData.revision) || serverSync.revision;
+
+    let offset = 0;
+    const clientLimit = 400;
+    while (true) {
+      showLoadProgress(`Klanten laden… ${DB.clients.length}${metaData.counts?.clients ? ` / ${metaData.counts.clients}` : ''}`);
+      const res = await salonApiFetchWithTimeout(
+        `${base}/load-chunk.php?part=clients&offset=${offset}&limit=${clientLimit}`,
+        { cache: 'no-store' },
+        90000
+      );
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Klanten laden mislukt');
+      DB.clients.push(...(data.items || []));
+      if (data.done || !(data.items || []).length) break;
+      offset += data.items.length;
+    }
+
+    offset = 0;
+    const apptLimit = 800;
+    while (true) {
+      showLoadProgress(`Afspraken laden… ${DB.appointments.length}${metaData.counts?.appointments ? ` / ${metaData.counts.appointments}` : ''}`);
+      const res = await salonApiFetchWithTimeout(
+        `${base}/load-chunk.php?part=appointments&offset=${offset}&limit=${apptLimit}`,
+        { cache: 'no-store' },
+        90000
+      );
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Afspraken laden mislukt');
+      DB.appointments.push(...(data.items || []));
+      if (data.done || !(data.items || []).length) break;
+      offset += data.items.length;
+    }
+
+    DB = applyDataDefaults(DB);
+    invalidateAppointmentsIndex();
+    repairPersonalBlockAppointments({ quiet: true });
+    safeSaveData(DB, { quiet: true });
+    serverSync.enabled = true;
+    serverSync.lastError = '';
+    serverSync.counts = metaData.counts || {
+      clients: DB.clients.length,
+      appointments: DB.appointments.length,
+    };
+    localStorage.setItem(SALON_SERVER_SYNC_PREF, 'on');
+    localStorage.setItem(SALON_SERVER_REVISION_KEY, String(serverSync.revision));
+    if (!opts.quiet) {
+      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
+    }
+    return true;
+  } catch (e) {
+    serverSync.lastError = e.message || String(e);
+    if (!opts.quiet) showToast('Database laden mislukt: ' + serverSync.lastError);
+    return false;
+  }
+}
+
+async function loadDatabaseFromServer(opts = {}) {
+  const base = getSalonApiBase();
+  if (!base) {
+    showToast('Open de site via je Hostinger-domein.');
+    return false;
+  }
+  if (!hasServerAccess()) {
+    if (authUser) serverSync.enabled = true;
+    else {
+      showToast('Log in om data te laden.');
+      return false;
+    }
+  }
+  if (!opts.quiet) showLoadProgress('Database laden…');
+  try {
+    const res = await salonApiFetchWithTimeout(`${base}/load.php`, { cache: 'no-store' }, 120000);
+    if (res.status === 504 || res.status === 502) {
+      throw new Error('Server timeout — laden in delen…');
+    }
+    const data = await res.json();
+    if (!data.ok) {
+      serverSync.lastError = data.error || 'Laden mislukt';
+      if (!opts.quiet) showToast('Database laden mislukt: ' + serverSync.lastError);
+      return false;
+    }
+    applyServerPayload(data);
+    serverSync.enabled = true;
+    serverSync.lastError = '';
+    localStorage.setItem(SALON_SERVER_SYNC_PREF, 'on');
+    if (!opts.quiet) {
+      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
+    }
+    return true;
+  } catch (e) {
+    console.warn('[Salon] load.php mislukt, chunked fallback:', e);
+    return loadDatabaseFromServerChunked(opts);
+  }
+}
+
 function hasServerAccess() {
   return !!authUser || !!getSalonApiKey();
 }
@@ -611,34 +742,46 @@ function repairPersonalBlockAppointments(options = {}) {
 
 async function startAppAfterLogin() {
   $('#brandName').textContent = DB.settings.salonName || 'Salon';
-  const tbodyToday = $('#todayReservations');
-  if (tbodyToday) {
-    tbodyToday.innerHTML = '<tr><td colspan="4" class="empty">Reserveringen laden…</td></tr>';
-  }
   showView('home');
-  const synced = await initServerDatabaseSync();
-  if (synced && (DB.clients || []).length < 50) {
-    showToast('Database is leeg — klanten worden geïmporteerd…');
-    await importSeedToServerDatabase(true);
-    await loadDatabaseFromServer({ quiet: true });
+
+  const hadLocal = (DB.clients || []).length > 50;
+  if (!hadLocal) {
+    const tbodyToday = $('#todayReservations');
+    if (tbodyToday) {
+      tbodyToday.innerHTML = '<tr><td colspan="4" class="empty">Reserveringen laden…</td></tr>';
+    }
+    showLoadProgress('Database laden…');
   }
-  if (!synced && (DB.clients || []).length === 0) {
-    await bootstrapSalonFromHostedSeed(true);
-    await tryMergeBundledElimCsv();
-    await tryMergeBundledSalonwareStats();
-  }
-  if ((DB.clients || []).length < 50 && getSalonApiBase()) {
-    showToast('Weinig data — open Instellingen → Data → Seed naar database importeren');
-  }
-  const repaired = repairPersonalBlockAppointments({ quiet: true });
-  if (repaired) saveData(DB, { quiet: true });
+
   try { updateSalonwareBundledChrome(); } catch (e) { /* */ }
   renderClients($('#searchClient')?.value || '');
   renderAgenda();
   renderHome();
-  if ((DB.clients || []).length > 100) {
-    showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
-  }
+
+  void (async () => {
+    const synced = await initServerDatabaseSync();
+    if (synced && (DB.clients || []).length < 50) {
+      showToast('Database is leeg — klanten worden geïmporteerd…');
+      await importSeedToServerDatabase(true);
+      await loadDatabaseFromServer({ quiet: true });
+    }
+    if (!synced && (DB.clients || []).length === 0) {
+      await bootstrapSalonFromHostedSeed(true);
+      await tryMergeBundledElimCsv();
+      await tryMergeBundledSalonwareStats();
+    }
+    if ((DB.clients || []).length < 50 && getSalonApiBase()) {
+      showToast('Weinig data — open Instellingen → Data → Seed naar database importeren');
+    }
+    const repaired = repairPersonalBlockAppointments({ quiet: true });
+    if (repaired) saveData(DB, { quiet: true });
+    renderClients($('#searchClient')?.value || '');
+    renderAgenda();
+    renderHome();
+    if ((DB.clients || []).length > 100) {
+      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
+    }
+  })();
 }
 
 function applyServerPayload(payload) {
@@ -698,42 +841,6 @@ async function checkServerDatabaseHealth() {
   } catch (e) {
     serverSync.available = false;
     return { ok: false, error: e.message || String(e) };
-  }
-}
-
-async function loadDatabaseFromServer(opts = {}) {
-  const base = getSalonApiBase();
-  if (!base) {
-    showToast('Open de site via je Hostinger-domein.');
-    return false;
-  }
-  if (!hasServerAccess()) {
-    if (authUser) serverSync.enabled = true;
-    else {
-      showToast('Log in om data te laden.');
-      return false;
-    }
-  }
-  try {
-    const res = await salonApiFetch(`${base}/load.php`, { cache: 'no-store' });
-    const data = await res.json();
-    if (!data.ok) {
-      serverSync.lastError = data.error || 'Laden mislukt';
-      showToast('Database laden mislukt: ' + serverSync.lastError);
-      return false;
-    }
-    applyServerPayload(data);
-    serverSync.enabled = true;
-    serverSync.lastError = '';
-    localStorage.setItem(SALON_SERVER_SYNC_PREF, 'on');
-    if (!opts.quiet) {
-      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken uit database`);
-    }
-    return true;
-  } catch (e) {
-    serverSync.lastError = e.message || String(e);
-    if (!opts.quiet) showToast('Database laden mislukt: ' + serverSync.lastError);
-    return false;
   }
 }
 

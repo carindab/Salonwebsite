@@ -240,10 +240,132 @@ function salon_import_seed(PDO $pdo): array
     salon_replace_appointments($pdo, $seed['appointments']);
     $revision = salon_bump_revision($pdo);
     $pdo->commit();
+    salon_refresh_load_cache($pdo);
     return [
         'clients' => count($seed['clients']),
         'appointments' => count($seed['appointments']),
         'revision' => $revision,
         'seedVersion' => $seed['v'] ?? null,
     ];
+}
+
+/** Snelle load-cache (gzip) — voorkomt 504 bij 10k+ afspraken. */
+function salon_cache_dir(): string
+{
+    $persist = function_exists('salon_persistent_config_dir') ? salon_persistent_config_dir() : null;
+    if ($persist !== null && is_writable($persist)) {
+        $dir = $persist . '/.salon-cache';
+    } else {
+        $dir = dirname(__DIR__) . '/.salon-cache';
+    }
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0750, true);
+    }
+    return $dir;
+}
+
+function salon_load_cache_path(int $revision): string
+{
+    return salon_cache_dir() . '/load-r' . $revision . '.json.gz';
+}
+
+function salon_prepare_api_runtime(): void
+{
+    @set_time_limit(300);
+    @ini_set('memory_limit', '512M');
+}
+
+function salon_build_load_payload(PDO $pdo): array
+{
+    $clients = salon_load_clients($pdo);
+    $appointments = salon_load_appointments($pdo);
+    return [
+        'ok' => true,
+        'revision' => salon_get_revision($pdo),
+        'meta' => salon_load_meta($pdo),
+        'clients' => $clients,
+        'appointments' => $appointments,
+        'counts' => [
+            'clients' => count($clients),
+            'appointments' => count($appointments),
+        ],
+    ];
+}
+
+function salon_write_load_cache(PDO $pdo, ?array $payload = null): bool
+{
+    $payload = $payload ?? salon_build_load_payload($pdo);
+    $revision = (int) ($payload['revision'] ?? salon_get_revision($pdo));
+    $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        return false;
+    }
+    $path = salon_load_cache_path($revision);
+    $ok = @file_put_contents($path, gzencode($json, 6)) !== false;
+    if ($ok) {
+        @chmod($path, 0640);
+        foreach (glob(salon_cache_dir() . '/load-r*.json.gz') ?: [] as $old) {
+            if ($old !== $path && is_file($old)) {
+                @unlink($old);
+            }
+        }
+    }
+    return $ok;
+}
+
+function salon_refresh_load_cache(PDO $pdo): void
+{
+    try {
+        salon_write_load_cache($pdo);
+    } catch (Throwable $e) {
+        /* cache is optioneel */
+    }
+}
+
+function salon_serve_load_cache(int $revision): bool
+{
+    $path = salon_load_cache_path($revision);
+    if (!is_file($path) || filesize($path) < 32) {
+        return false;
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Encoding: gzip');
+    header('Cache-Control: private, no-cache');
+    header('X-Salon-Cache: hit');
+    readfile($path);
+    exit;
+}
+
+function salon_load_clients_chunk(PDO $pdo, int $offset, int $limit): array
+{
+    $stmt = $pdo->prepare('SELECT data FROM salon_clients ORDER BY id LIMIT ? OFFSET ?');
+    $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+    $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
+    $clients = [];
+    foreach ($stmt as $row) {
+        $decoded = json_decode($row['data'], true);
+        if (is_array($decoded)) {
+            $clients[] = $decoded;
+        }
+    }
+    return $clients;
+}
+
+function salon_load_appointments_chunk(PDO $pdo, int $offset, int $limit): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT data FROM salon_appointments ORDER BY appt_date ASC, appt_time ASC, id LIMIT ? OFFSET ?'
+    );
+    $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+    $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
+    $appointments = [];
+    foreach ($stmt as $row) {
+        $decoded = json_decode($row['data'], true);
+        if (is_array($decoded)) {
+            $appointments[] = $decoded;
+        }
+    }
+    return $appointments;
 }

@@ -1,5 +1,11 @@
 DirectoryIndex index.html index.php
 
+# PHP — langere timeout voor grote database-load (voorkomt 504)
+<IfModule mod_fcgid.c>
+  FcgidIOTimeout 300
+  FcgidConnectTimeout 60
+</IfModule>
+
 # Gevoelige bestanden — niet publiek downloadbaar
 <FilesMatch "\.(csv|json)$">
   Require all denied

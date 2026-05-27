@@ -14,6 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 set_time_limit(300);
 ini_set('memory_limit', '512M');
+salon_prepare_api_runtime();
 
 try {
     $body = salon_read_body();
@@ -52,6 +53,7 @@ try {
     }
     $revision = salon_bump_revision($pdo);
     $pdo->commit();
+    salon_refresh_load_cache($pdo);
 
     salon_json_out([
         'ok' => true,

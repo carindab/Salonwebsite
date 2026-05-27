@@ -6,6 +6,7 @@ require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/session.php';
 
 salon_cors();
+salon_prepare_api_runtime();
 
 try {
     salon_try_remember_login();
