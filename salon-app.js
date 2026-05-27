@@ -4363,28 +4363,34 @@ function renderFactuurPage() {
       try {
         const stRes = await salonApiFetch(`${base}/mail-status.php`, { cache: 'no-store' });
         const st = await stRes.json();
-        if (st.ok && st.configured) {
-          const sendRes = await salonApiFetch(`${base}/send-invoice.php`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: c.email,
-              subject: m.subject,
-              body: m.body,
-              bcc,
-              filename: `Factuur-${a.invoiceNumber}.html`,
-              attachmentHtml: buildFactuurHtmlDocument(a, c),
-            }),
-          });
-          const send = await sendRes.json();
-          if (send.ok) {
-            logSentMessage(c.id, 'factuur', m.subject);
-            showToast(`Factuur verzonden naar ${c.email} ✓`);
-            return;
-          }
-          showToast('Verzenden mislukt: ' + (send.error || 'onbekend'));
+        if (!st.ok || !st.configured) {
+          showToast('Gmail nog niet gekoppeld op de server — open setup-mail.php en koppel opnieuw.');
           return;
         }
+        const sendRes = await salonApiFetch(`${base}/send-invoice.php`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: c.email,
+            subject: m.subject,
+            body: m.body,
+            bcc,
+            filename: `Factuur-${a.invoiceNumber}.html`,
+            attachmentHtml: buildFactuurHtmlDocument(a, c),
+          }),
+        });
+        const send = await sendRes.json().catch(() => ({}));
+        if (sendRes.status === 404) {
+          showToast('Server nog niet bijgewerkt — wacht 2 minuten en ververs de pagina (Cmd+Shift+R).');
+          return;
+        }
+        if (send.ok) {
+          logSentMessage(c.id, 'factuur', m.subject);
+          showToast(`Factuur verzonden naar ${c.email} ✓`);
+          return;
+        }
+        showToast('Verzenden mislukt: ' + (send.error || 'onbekend'));
+        return;
       } catch (e) {
         showToast('Verzenden mislukt: ' + (e.message || e));
         return;
@@ -4396,7 +4402,7 @@ function renderFactuurPage() {
     downloadFactuurHtmlBijlage(a.id);
     logSentMessage(c.id, 'factuur', m.subject);
     openMailto(c.email, m.subject, m.body, bcc);
-    showToast('E-mail opent in je mail-app. Factuur staat in Downloads — voeg toe als bijlage.');
+    showToast('Geen serververbinding — e-mail opent in je mail-app. Factuur staat in Downloads.');
   });
 }
 
