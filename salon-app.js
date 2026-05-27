@@ -3,8 +3,8 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v34 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v34';
+console.log('%c[Salon Beheer] salon-app.js v35 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v35';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -1499,7 +1499,7 @@ function renderHome() {
     ? upcomingToday.map(a => `<div class="birthday-row"><span class="name">${escapeHtml(a.time)} – ${escapeHtml(clientFullName(findClient(a.clientId)))}</span><span class="date">${escapeHtml(appointmentSummary(a))}</span></div>`).join('')
     : `<p class="empty">Er zijn geen afspraken (meer) vandaag.</p>`;
 
-  const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); })();
+  const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate()+1); return toLocalISODate(d); })();
   const tomApps = getAppointmentsByDate(tomorrow);
   $('#appointmentsTomorrow').innerHTML = tomApps.length
     ? tomApps.map(a => `<div class="birthday-row"><span class="name">${escapeHtml(a.time)} – ${escapeHtml(clientFullName(findClient(a.clientId)))}</span><span class="date">${escapeHtml(appointmentSummary(a))}</span></div>`).join('')
@@ -4736,33 +4736,69 @@ let dagDate = todayISO();
 const NL_MONTHS = ['Januari','Februari','Maart','April','Mei','Juni','Juli','Augustus','September','Oktober','November','December'];
 
 const reportFilters = {
-  bestedingen:    { mode:'month', month: new Date().getMonth(), year: new Date().getFullYear(), quarter: Math.floor(new Date().getMonth()/3), from: '', to: '' },
-  omzetcategorie: { mode:'month', month: new Date().getMonth(), year: new Date().getFullYear(), quarter: Math.floor(new Date().getMonth()/3), from: '', to: '', soort:'all' },
-  omzetdienst:    { mode:'month', month: new Date().getMonth(), year: new Date().getFullYear(), quarter: Math.floor(new Date().getMonth()/3), from: '', to: '', soort:'all' }
+  bestedingen:    { mode:'month', month: new Date().getMonth(), year: new Date().getFullYear(), quarter: Math.floor(new Date().getMonth()/3), week: 0, from: '', to: '' },
+  omzetcategorie: { mode:'month', month: new Date().getMonth(), year: new Date().getFullYear(), quarter: Math.floor(new Date().getMonth()/3), week: 0, from: '', to: '', soort:'all' },
+  omzetdienst:    { mode:'month', month: new Date().getMonth(), year: new Date().getFullYear(), quarter: Math.floor(new Date().getMonth()/3), week: 0, from: '', to: '', soort:'all' }
 };
 
 function getPeriodRange(f) {
   let start, end;
   if (f.mode === 'month') {
     start = new Date(f.year, f.month, 1);
-    end   = new Date(f.year, f.month+1, 0);
+    end   = new Date(f.year, f.month + 1, 0);
   } else if (f.mode === 'quarter') {
     const m = f.quarter * 3;
     start = new Date(f.year, m, 1);
-    end   = new Date(f.year, m+3, 0);
+    end   = new Date(f.year, m + 3, 0);
+  } else if (f.mode === 'week') {
+    const monthEnd = new Date(f.year, f.month + 1, 0).getDate();
+    const w = Math.max(0, Math.min(4, Number(f.week) || 0));
+    const dayStart = w * 7 + 1;
+    const dayEnd = Math.min((w + 1) * 7, monthEnd);
+    start = new Date(f.year, f.month, dayStart);
+    end   = new Date(f.year, f.month, dayEnd);
   } else if (f.mode === 'year') {
     start = new Date(f.year, 0, 1);
     end   = new Date(f.year, 11, 31);
-  } else { // free
-    start = f.from ? new Date(f.from) : new Date(new Date().getFullYear(),0,1);
-    end   = f.to   ? new Date(f.to)   : new Date();
+  } else {
+    start = f.from ? parseLocalYMD(f.from) : new Date(f.year, 0, 1);
+    end   = f.to   ? parseLocalYMD(f.to)   : new Date();
   }
+  const startISO = toLocalISODate(start);
+  const endISO = toLocalISODate(end);
+  const today = todayLocalISO();
+  const isFuturePeriod = startISO > today;
+  const isPartialPeriod = endISO > today && startISO <= today;
+  const effectiveEndISO = endISO > today ? today : endISO;
+  let titleSuffix = '';
+  if (isPartialPeriod) titleSuffix = ` (tot ${fmtDate(effectiveEndISO)})`;
+  else if (isFuturePeriod) titleSuffix = ' (ingepland + afgerond)';
   return {
-    startISO: start.toISOString().slice(0,10),
-    endISO: end.toISOString().slice(0,10),
-    startNL: fmtDate(start.toISOString().slice(0,10)),
-    endNL: fmtDate(end.toISOString().slice(0,10))
+    startISO,
+    endISO,
+    effectiveEndISO,
+    isFuturePeriod,
+    isPartialPeriod,
+    startNL: fmtDate(startISO),
+    endNL: fmtDate(endISO),
+    titleSuffix,
   };
+}
+
+/** Rapportage: afgerond t/m vandaag; toekomstige dagen in periode ook gepland (Juni e.d.). */
+function filterReportAppointments(range) {
+  const today = todayLocalISO();
+  return (DB.appointments || []).filter(a => {
+    if (a.status === 'geannuleerd' || a.status === 'verwijderd') return false;
+    if (a.date < range.startISO || a.date > range.endISO) return false;
+    if (!(a.items || []).length) return false;
+    if (a.date <= today) return a.status === 'afgerond';
+    return a.status === 'afgerond' || a.status === 'gepland';
+  });
+}
+
+function reportPeriodTitle(range) {
+  return `Resultaten: ${range.startNL} t/m ${range.endNL}${range.titleSuffix || ''}`;
 }
 
 function periodFilterCardHTML(rep) {
@@ -4772,6 +4808,7 @@ function periodFilterCardHTML(rep) {
   for (let y = curY + 1; y >= 2013; y--) yearOpts.push(`<option value="${y}" ${y===f.year?'selected':''}>${y}</option>`);
   const monthOpts = NL_MONTHS.map((m,i)=>`<option value="${i}" ${i===f.month?'selected':''}>${m}</option>`).join('');
   const quarterOpts = ['1e Kwartaal','2e Kwartaal','3e Kwartaal','4e Kwartaal'].map((q,i)=>`<option value="${i}" ${i===f.quarter?'selected':''}>${q}</option>`).join('');
+  const weekOpts = ['1e week','2e week','3e week','4e week','5e week'].map((w,i)=>`<option value="${i}" ${i===(f.week||0)?'selected':''}>${w}</option>`).join('');
   const titles = { bestedingen:'Bestedingen', omzetcategorie:'Omzet per categorie', omzetdienst:'Omzet per dienst of product' };
 
   const extraSoort = (rep==='omzetcategorie' || rep==='omzetdienst') ? `
@@ -4792,6 +4829,7 @@ function periodFilterCardHTML(rep) {
           <label class="rap-label">Datum bereik:</label>
           <div class="rap-period">
             <label class="rap-radio"><input type="radio" name="rap-mode-${rep}" value="month"   ${f.mode==='month'?'checked':''}> Maand</label>
+            <label class="rap-radio"><input type="radio" name="rap-mode-${rep}" value="week"    ${f.mode==='week'?'checked':''}> Week</label>
             <label class="rap-radio"><input type="radio" name="rap-mode-${rep}" value="quarter" ${f.mode==='quarter'?'checked':''}> Kwartaal</label>
             <label class="rap-radio"><input type="radio" name="rap-mode-${rep}" value="year"    ${f.mode==='year'?'checked':''}> Jaar</label>
             <label class="rap-radio"><input type="radio" name="rap-mode-${rep}" value="free"    ${f.mode==='free'?'checked':''}> Vrije selectie</label>
@@ -4803,15 +4841,19 @@ function periodFilterCardHTML(rep) {
             ${f.mode==='month' ? `
               <select class="rap-month" data-rep="${rep}">${monthOpts}</select>
               <select class="rap-year" data-rep="${rep}">${yearOpts.join('')}</select>` : ''}
+            ${f.mode==='week' ? `
+              <select class="rap-month" data-rep="${rep}">${monthOpts}</select>
+              <select class="rap-week" data-rep="${rep}">${weekOpts}</select>
+              <select class="rap-year" data-rep="${rep}">${yearOpts.join('')}</select>` : ''}
             ${f.mode==='quarter' ? `
               <select class="rap-quarter" data-rep="${rep}">${quarterOpts}</select>
               <select class="rap-year" data-rep="${rep}">${yearOpts.join('')}</select>` : ''}
             ${f.mode==='year' ? `
               <select class="rap-year" data-rep="${rep}">${yearOpts.join('')}</select>` : ''}
             ${f.mode==='free' ? `
-              <input type="date" class="rap-from" data-rep="${rep}" value="${f.from || new Date(f.year,0,1).toISOString().slice(0,10)}">
+              <input type="date" class="rap-from" data-rep="${rep}" value="${f.from || toLocalISODate(new Date(f.year,0,1))}">
               <span style="padding:0 4px;">-</span>
-              <input type="date" class="rap-to" data-rep="${rep}" value="${f.to || new Date(f.year,11,31).toISOString().slice(0,10)}">` : ''}
+              <input type="date" class="rap-to" data-rep="${rep}" value="${f.to || toLocalISODate(new Date(f.year,11,31))}">` : ''}
           </div>
         </div>
         ${extraSoort}
@@ -4953,11 +4995,7 @@ function renderDagrapport() {
 function renderBestedingen() {
   const f = reportFilters.bestedingen;
   const range = getPeriodRange(f);
-  const trans = DB.appointments.filter(a =>
-    a.status==='afgerond' &&
-    a.date >= range.startISO &&
-    a.date <= range.endISO
-  );
+  const trans = filterReportAppointments(range);
 
   const totalOmzet = trans.reduce((s,a) => s + appointmentTotal(a) - (a.korting||0), 0);
   const uniqueClients = new Set(trans.map(a=>a.clientId)).size;
@@ -4983,7 +5021,7 @@ function renderBestedingen() {
   el.innerHTML = `
     ${periodFilterCardHTML('bestedingen')}
     <div class="card rap-result-card">
-      <div class="card-title">Resultaten: ${range.startNL} t/m ${range.endNL}</div>
+      <div class="card-title">${reportPeriodTitle(range)}</div>
       <div class="card-body">
         <div class="rap-stats">
           <div class="rap-stat"><span class="rap-stat-label">Aantal bezoeken</span><span class="rap-stat-value">${trans.length}</span></div>
@@ -5015,11 +5053,7 @@ function renderBestedingen() {
 function renderOmzetCategorie() {
   const f = reportFilters.omzetcategorie;
   const range = getPeriodRange(f);
-  const trans = DB.appointments.filter(a =>
-    a.status==='afgerond' &&
-    a.date >= range.startISO &&
-    a.date <= range.endISO
-  );
+  const trans = filterReportAppointments(range);
 
   const byCat = {};
   let totalQty = 0, totalRev = 0;
@@ -5065,7 +5099,7 @@ function renderOmzetCategorie() {
   el.innerHTML = `
     ${periodFilterCardHTML('omzetcategorie')}
     <div class="card rap-result-card">
-      <div class="card-title">Resultaten: ${range.startNL} t/m ${range.endNL}</div>
+      <div class="card-title">${reportPeriodTitle(range)}</div>
       <div class="card-body">
         <div class="rap-stats">
           <div class="rap-stat"><span class="rap-stat-label">Aantal bezoeken</span><span class="rap-stat-value">${totVisits}</span></div>
@@ -5123,11 +5157,7 @@ function renderOmzetCategorie() {
 function renderOmzetDienst() {
   const f = reportFilters.omzetdienst;
   const range = getPeriodRange(f);
-  const trans = DB.appointments.filter(a =>
-    a.status==='afgerond' &&
-    a.date >= range.startISO &&
-    a.date <= range.endISO
-  );
+  const trans = filterReportAppointments(range);
 
   const byItem = {};
   let totalRev = 0;
@@ -5164,7 +5194,7 @@ function renderOmzetDienst() {
   el.innerHTML = `
     ${periodFilterCardHTML('omzetdienst')}
     <div class="card rap-result-card">
-      <div class="card-title">Resultaten: ${range.startNL} t/m ${range.endNL}</div>
+      <div class="card-title">${reportPeriodTitle(range)}</div>
       <div class="card-body">
         <div class="rap-stats">
           <div class="rap-stat"><span class="rap-stat-label">Aantal bezoeken</span><span class="rap-stat-value">${totVisits}</span></div>
@@ -7193,8 +7223,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const repRender = { bestedingen: renderBestedingen, omzetcategorie: renderOmzetCategorie, omzetdienst: renderOmzetDienst };
 
   document.addEventListener('click', e => {
-    if (e.target.id==='dagPrev')   { const d=new Date(dagDate); d.setDate(d.getDate()-1); dagDate=d.toISOString().slice(0,10); renderDagrapport(); }
-    if (e.target.id==='dagNext')   { const d=new Date(dagDate); d.setDate(d.getDate()+1); dagDate=d.toISOString().slice(0,10); renderDagrapport(); }
+    if (e.target.id==='dagPrev')   { const d=parseLocalYMD(dagDate); d.setDate(d.getDate()-1); dagDate=toLocalISODate(d); renderDagrapport(); }
+    if (e.target.id==='dagNext')   { const d=parseLocalYMD(dagDate); d.setDate(d.getDate()+1); dagDate=toLocalISODate(d); renderDagrapport(); }
     if (e.target.id==='dagToday')  { dagDate=todayISO(); renderDagrapport(); }
     if (e.target.id==='printDag')  { window.print(); }
 
@@ -7240,6 +7270,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (rep && reportFilters[rep]) {
       const f = reportFilters[rep];
       if (e.target.classList.contains('rap-month'))    f.month   = parseInt(e.target.value,10);
+      if (e.target.classList.contains('rap-week'))     f.week    = parseInt(e.target.value,10);
       if (e.target.classList.contains('rap-quarter'))  f.quarter = parseInt(e.target.value,10);
       if (e.target.classList.contains('rap-year'))     f.year    = parseInt(e.target.value,10);
       if (e.target.classList.contains('rap-from'))     f.from    = e.target.value;
