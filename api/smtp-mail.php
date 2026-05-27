@@ -2,7 +2,14 @@
 
 declare(strict_types=1);
 
-/** Gmail SMTP — probeert eerst SSL :465 (Hostinger), daarna STARTTLS :587. */
+require_once __DIR__ . '/lib/phpmailer/Exception.php';
+require_once __DIR__ . '/lib/phpmailer/SMTP.php';
+require_once __DIR__ . '/lib/phpmailer/PHPMailer.php';
+
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception as MailException;
+
+/** Gmail SMTP — PHPMailer met SSL :465 en STARTTLS :587 (Hostinger). */
 function salon_smtp_send(string $to, string $subject, string $bodyPlain, ?string $bcc = null): array
 {
     salon_load_mail_config();
@@ -21,224 +28,172 @@ function salon_smtp_send(string $to, string $subject, string $bodyPlain, ?string
         return ['ok' => false, 'error' => 'Ongeldig e-mailadres'];
     }
 
-    $port = defined('SALON_SMTP_PORT') ? (int) SALON_SMTP_PORT : 465;
     $errors = [];
+    $attempts = [
+        ['port' => 465, 'secure' => PHPMailer::ENCRYPTION_SMTPS, 'label' => '465 SSL'],
+        ['port' => 587, 'secure' => PHPMailer::ENCRYPTION_STARTTLS, 'label' => '587 STARTTLS'],
+    ];
 
-    if ($port === 587) {
-        $r = salon_smtp_send_starttls($host, 587, $user, $pass, $from, $fromName, $to, $subject, $bodyPlain, $bcc);
+    foreach ($attempts as $attempt) {
+        $r = salon_smtp_send_phpmailer(
+            $host,
+            (int) $attempt['port'],
+            (string) $attempt['secure'],
+            $user,
+            $pass,
+            $from,
+            $fromName,
+            $to,
+            $subject,
+            $bodyPlain,
+            $bcc
+        );
         if ($r['ok']) {
             return $r;
         }
-        $errors[] = '587: ' . ($r['error'] ?? '?');
-        $r = salon_smtp_send_ssl($host, 465, $user, $pass, $from, $fromName, $to, $subject, $bodyPlain, $bcc);
-        if ($r['ok']) {
-            return $r;
-        }
-        $errors[] = '465: ' . ($r['error'] ?? '?');
-    } else {
-        $r = salon_smtp_send_ssl($host, 465, $user, $pass, $from, $fromName, $to, $subject, $bodyPlain, $bcc);
-        if ($r['ok']) {
-            return $r;
-        }
-        $errors[] = '465: ' . ($r['error'] ?? '?');
-        $r = salon_smtp_send_starttls($host, 587, $user, $pass, $from, $fromName, $to, $subject, $bodyPlain, $bcc);
-        if ($r['ok']) {
-            return $r;
-        }
-        $errors[] = '587: ' . ($r['error'] ?? '?');
+        $errors[] = $attempt['label'] . ': ' . ($r['error'] ?? '?');
     }
 
     return ['ok' => false, 'error' => implode(' · ', $errors)];
 }
 
-function salon_smtp_ssl_context()
+function salon_smtp_ssl_options(): array
 {
-    return stream_context_create([
+    return [
         'ssl' => [
-            'verify_peer' => true,
-            'verify_peer_name' => true,
-            'allow_self_signed' => false,
-            'SNI_enabled' => true,
-            'peer_name' => 'smtp.gmail.com',
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+            'allow_self_signed' => true,
         ],
-    ]);
-}
-
-function salon_smtp_tls_crypto_method(): int
-{
-    $methods = STREAM_CRYPTO_METHOD_TLS_CLIENT;
-    if (defined('STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT')) {
-        $methods |= STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
-    }
-    if (defined('STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT')) {
-        $methods |= STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
-    }
-    return $methods;
-}
-
-function salon_smtp_send_ssl(
-    string $host,
-    int $port,
-    string $user,
-    string $pass,
-    string $from,
-    string $fromName,
-    string $to,
-    string $subject,
-    string $bodyPlain,
-    ?string $bcc
-): array {
-    $errno = 0;
-    $errstr = '';
-    $fp = @stream_socket_client(
-        'ssl://' . $host . ':' . $port,
-        $errno,
-        $errstr,
-        30,
-        STREAM_CLIENT_CONNECT,
-        salon_smtp_ssl_context()
-    );
-    if (!$fp) {
-        return ['ok' => false, 'error' => 'SSL-verbinding mislukt: ' . ($errstr ?: (string) $errno)];
-    }
-    stream_set_timeout($fp, 30);
-
-    try {
-        salon_smtp_session($fp, $user, $pass, $from, $fromName, $to, $subject, $bodyPlain, $bcc, false);
-    } catch (Throwable $e) {
-        @fclose($fp);
-        return ['ok' => false, 'error' => $e->getMessage()];
-    }
-
-    fclose($fp);
-    return ['ok' => true];
-}
-
-function salon_smtp_send_starttls(
-    string $host,
-    int $port,
-    string $user,
-    string $pass,
-    string $from,
-    string $fromName,
-    string $to,
-    string $subject,
-    string $bodyPlain,
-    ?string $bcc
-): array {
-    $errno = 0;
-    $errstr = '';
-    $fp = @stream_socket_client(
-        'tcp://' . $host . ':' . $port,
-        $errno,
-        $errstr,
-        30,
-        STREAM_CLIENT_CONNECT
-    );
-    if (!$fp) {
-        return ['ok' => false, 'error' => 'TCP-verbinding mislukt: ' . ($errstr ?: (string) $errno)];
-    }
-    stream_set_timeout($fp, 30);
-
-    try {
-        salon_smtp_expect($fp, [220]);
-        salon_smtp_cmd($fp, 'EHLO agenda.eliminstituut.nl', [250]);
-        salon_smtp_cmd($fp, 'STARTTLS', [220]);
-        if (!@stream_socket_enable_crypto($fp, true, salon_smtp_tls_crypto_method())) {
-            throw new RuntimeException('STARTTLS encryptie mislukt');
-        }
-        salon_smtp_session($fp, $user, $pass, $from, $fromName, $to, $subject, $bodyPlain, $bcc, true);
-    } catch (Throwable $e) {
-        @fclose($fp);
-        return ['ok' => false, 'error' => $e->getMessage()];
-    }
-
-    fclose($fp);
-    return ['ok' => true];
-}
-
-function salon_smtp_session(
-    $fp,
-    string $user,
-    string $pass,
-    string $from,
-    string $fromName,
-    string $to,
-    string $subject,
-    string $bodyPlain,
-    ?string $bcc,
-    bool $ehloAfterTls
-): void {
-    if (!$ehloAfterTls) {
-        salon_smtp_expect($fp, [220]);
-    }
-    salon_smtp_cmd($fp, 'EHLO agenda.eliminstituut.nl', [250]);
-    salon_smtp_cmd($fp, 'AUTH LOGIN', [334]);
-    salon_smtp_cmd($fp, base64_encode($user), [334]);
-    salon_smtp_cmd($fp, base64_encode($pass), [235]);
-    salon_smtp_cmd($fp, 'MAIL FROM:<' . $from . '>', [250]);
-    salon_smtp_cmd($fp, 'RCPT TO:<' . $to . '>', [250, 251]);
-    if ($bcc && filter_var($bcc, FILTER_VALIDATE_EMAIL)) {
-        salon_smtp_cmd($fp, 'RCPT TO:<' . $bcc . '>', [250, 251]);
-    }
-    salon_smtp_cmd($fp, 'DATA', [354]);
-
-    $encodedSubject = salon_mime_encode_header($subject);
-    $encodedFrom = salon_mime_encode_header($fromName) . ' <' . $from . '>';
-    $headers = [
-        'From: ' . $encodedFrom,
-        'To: ' . $to,
-        'Subject: ' . $encodedSubject,
-        'MIME-Version: 1.0',
-        'Content-Type: text/plain; charset=UTF-8',
-        'Content-Transfer-Encoding: 8bit',
-        'Date: ' . date('r'),
     ];
-    if ($bcc && filter_var($bcc, FILTER_VALIDATE_EMAIL)) {
-        $headers[] = 'Bcc: ' . $bcc;
-    }
-    $body = str_replace(["\r\n", "\r"], "\n", $bodyPlain);
-    $body = str_replace("\n.", "\n..", $body);
-    $message = implode("\r\n", $headers) . "\r\n\r\n" . $body;
-    fwrite($fp, $message . "\r\n.\r\n");
-    salon_smtp_expect($fp, [250]);
-    salon_smtp_cmd($fp, 'QUIT', [221]);
 }
 
-function salon_smtp_cmd($fp, string $cmd, array $okCodes): void
-{
-    fwrite($fp, $cmd . "\r\n");
-    salon_smtp_expect($fp, $okCodes);
-}
-
-function salon_smtp_expect($fp, array $okCodes): string
-{
-    $line = '';
-    while ($str = fgets($fp, 8192)) {
-        $line = $str;
-        if (strlen($str) >= 4 && $str[3] === ' ') {
-            break;
+function salon_smtp_send_phpmailer(
+    string $host,
+    int $port,
+    string $secure,
+    string $user,
+    string $pass,
+    string $from,
+    string $fromName,
+    string $to,
+    string $subject,
+    string $bodyPlain,
+    ?string $bcc
+): array {
+    $mail = new PHPMailer(true);
+    try {
+        $mail->CharSet = PHPMailer::CHARSET_UTF8;
+        $mail->isSMTP();
+        $mail->Host = $host;
+        $mail->Port = $port;
+        $mail->SMTPAuth = true;
+        $mail->Username = $user;
+        $mail->Password = $pass;
+        $mail->SMTPSecure = $secure;
+        $mail->Timeout = 30;
+        $mail->SMTPOptions = salon_smtp_ssl_options();
+        $mail->setFrom($from, $fromName);
+        $mail->addAddress($to);
+        if ($bcc && filter_var($bcc, FILTER_VALIDATE_EMAIL)) {
+            $mail->addBCC($bcc);
         }
+        $mail->Subject = $subject;
+        $mail->Body = $bodyPlain;
+        $mail->isHTML(false);
+        $mail->send();
+        return ['ok' => true];
+    } catch (MailException $e) {
+        return ['ok' => false, 'error' => salon_smtp_short_error($mail->ErrorInfo ?: $e->getMessage())];
+    } catch (Throwable $e) {
+        return ['ok' => false, 'error' => salon_smtp_short_error($e->getMessage())];
     }
-    if ($line === '') {
-        throw new RuntimeException('SMTP: geen antwoord van server');
-    }
-    $code = (int) substr($line, 0, 3);
-    if (!in_array($code, $okCodes, true)) {
-        throw new RuntimeException('SMTP: ' . trim($line));
-    }
-    return $line;
 }
 
-function salon_mime_encode_header(string $text): string
+function salon_smtp_short_error(string $msg): string
 {
-    if (preg_match('/^[\x20-\x7E]*$/', $text)) {
-        return $text;
+    $msg = trim(preg_replace('/\s+/', ' ', $msg) ?? $msg);
+    if (stripos($msg, 'Could not connect') !== false || stripos($msg, 'Failed to connect') !== false) {
+        return 'Geen verbinding met Gmail (poort geblokkeerd?)';
     }
-    return '=?UTF-8?B?' . base64_encode($text) . '?=';
+    if (stripos($msg, 'SMTP connect() failed') !== false) {
+        return 'SMTP-verbinding mislukt';
+    }
+    if (stripos($msg, '535') !== false || stripos($msg, 'authentication') !== false || stripos($msg, 'Username and Password not accepted') !== false) {
+        return 'Inloggen mislukt — controleer app-wachtwoord (16 tekens, nieuw aanmaken)';
+    }
+    if (strlen($msg) > 180) {
+        return substr($msg, 0, 177) . '...';
+    }
+    return $msg;
 }
 
 function salon_normalize_app_password(string $pass): string
 {
     return str_replace(' ', '', trim($pass));
+}
+
+/** Diagnose: test poorten en SMTP zonder mail te sturen. */
+function salon_smtp_diagnose(?string $user = null, ?string $pass = null): array
+{
+    salon_load_mail_config();
+    $host = 'smtp.gmail.com';
+    $user = $user ?? (defined('SALON_SMTP_USER') ? SALON_SMTP_USER : '');
+    $pass = $pass ?? (defined('SALON_SMTP_PASS') ? SALON_SMTP_PASS : '');
+    $configuredPort = defined('SALON_SMTP_PORT') ? (int) SALON_SMTP_PORT : 0;
+
+    $out = [
+        'php' => PHP_VERSION,
+        'openssl' => extension_loaded('openssl'),
+        'configured_port' => $configuredPort,
+        'user' => $user !== '' ? $user : '(leeg)',
+        'pass_len' => strlen($pass),
+        'ports' => [],
+        'send_test' => null,
+    ];
+
+    foreach ([465, 587] as $port) {
+        $errno = 0;
+        $errstr = '';
+        $target = $port === 465 ? 'ssl://' . $host . ':' . $port : 'tcp://' . $host . ':' . $port;
+        $ctx = $port === 465 ? stream_context_create(['ssl' => salon_smtp_ssl_options()['ssl']]) : null;
+        $fp = @stream_socket_client($target, $errno, $errstr, 10, STREAM_CLIENT_CONNECT, $ctx);
+        $out['ports'][$port] = $fp ? 'open' : ('blocked: ' . ($errstr ?: (string) $errno));
+        if ($fp) {
+            fclose($fp);
+        }
+    }
+
+    if ($user !== '' && $pass !== '') {
+        $out['send_test'] = salon_smtp_send_phpmailer(
+            $host,
+            465,
+            PHPMailer::ENCRYPTION_SMTPS,
+            $user,
+            $pass,
+            $user,
+            'Elim Instituut',
+            $user,
+            'Diagnose — Elim Instituut',
+            "SMTP-diagnose " . date('Y-m-d H:i') . "\nAls u dit leest werkt Gmail.",
+            null
+        );
+        if (!$out['send_test']['ok']) {
+            $out['send_test_587'] = salon_smtp_send_phpmailer(
+                $host,
+                587,
+                PHPMailer::ENCRYPTION_STARTTLS,
+                $user,
+                $pass,
+                $user,
+                'Elim Instituut',
+                $user,
+                'Diagnose — Elim Instituut',
+                "SMTP-diagnose 587 " . date('Y-m-d H:i'),
+                null
+            );
+        }
+    }
+
+    return $out;
 }

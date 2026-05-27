@@ -43,20 +43,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'test') {
         require_once __DIR__ . '/bootstrap.php';
-        require_once __DIR__ . '/smtp-mail.php';
-        if ($appPass !== '') {
-            $cronKey = salon_read_cron_key();
-            salon_write_mail_config(salon_build_mail_config_php($gmail, $appPass, $gmail, $fromName, $cronKey));
-        } elseif (!salon_mail_configured()) {
-            mail_setup_html('Test mislukt', '<p class="err">Vul het Gmail app-wachtwoord in (16 tekens, zonder spaties).</p>' . mail_setup_form($key));
+        if ($appPass === '') {
+            mail_setup_html(
+                'Test mislukt',
+                '<p class="err">Vul het Gmail app-wachtwoord opnieuw in (16 tekens). Zonder wachtwoord kan de test niet.</p>'
+                . mail_setup_form($key)
+            );
         }
+        $cronKey = salon_read_cron_key();
+        salon_write_mail_config(salon_build_mail_config_php($gmail, $appPass, $gmail, $fromName, $cronKey));
         salon_load_mail_config();
         $testTo = $gmail;
         $res = salon_smtp_send($testTo, 'Test — Elim Instituut agenda', "Dit is een testmail van je salon-agenda.\n\nAutomatische herinneringen werken als Hostinger cron is ingesteld.");
         if ($res['ok']) {
             mail_setup_html('Gmail test gelukt', '<p class="ok">Testmail verstuurd naar ' . htmlspecialchars($gmail) . '.</p>' . mail_setup_form($key));
         }
-        mail_setup_html('Test mislukt', '<p class="err">' . htmlspecialchars($res['error'] ?? 'onbekend') . '</p>' . mail_setup_form($key));
+        $diagLink = 'mail-diagnose.php?key=' . urlencode($key);
+        mail_setup_html(
+            'Test mislukt',
+            '<p class="err">' . htmlspecialchars($res['error'] ?? 'onbekend') . '</p>'
+            . '<p class="note">Tip: maak een <strong>nieuw</strong> app-wachtwoord aan bij Google (Beveiliging → App-wachtwoorden). Plak de 16 tekens zonder spaties.</p>'
+            . '<p><a href="' . htmlspecialchars($diagLink) . '">Technische diagnose openen</a></p>'
+            . mail_setup_form($key)
+        );
     }
 
     if ($appPass === '') {
