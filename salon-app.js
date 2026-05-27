@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v38 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v38';
-const BUILD_LABEL = '27 mei 2026 · omzet 2025 fix';
+console.log('%c[Salon Beheer] salon-app.js v39 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v39';
+const BUILD_LABEL = '27 mei 2026 · mobiel + mail';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -166,8 +166,8 @@ function defaultData() {
       postal: '2951 GE',
       city: 'Alblasserdam',
       phone: '078 69 11 113',
-      email: '',
-      website: '',
+      email: 'eliminstituut@gmail.com',
+      website: 'https://agenda.eliminstituut.nl',
       kvk: '',
       btwNummer: 'NL24RABO0123949521',
       iban: '',
@@ -310,6 +310,11 @@ function loadData() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = applyDataDefaults(JSON.parse(raw));
+      if (parsed._serverMode) {
+        parsed.clients = [];
+        parsed.appointments = [];
+        return parsed;
+      }
       const rawA = localStorage.getItem(APPOINTMENTS_STORAGE_KEY);
       if (rawA) {
         try {
@@ -328,6 +333,31 @@ function loadData() {
   return applyDataDefaults(defaultData());
 }
 
+function usesServerAsPrimaryStorage() {
+  return serverSync.enabled && !!getSalonApiBase() && hasServerAccess();
+}
+
+/** Op mobiel past 10k+ afspraken niet in localStorage — bij server-sync alleen instellingen lokaal. */
+function saveLightLocalCache(d) {
+  const light = {
+    v: 2,
+    _serverMode: true,
+    settings: d.settings,
+    messageTemplates: d.messageTemplates,
+    intakeQuestions: d.intakeQuestions,
+    treatmentCategories: d.treatmentCategories,
+    treatments: d.treatments,
+    productCategories: d.productCategories,
+    products: d.products,
+    packages: d.packages,
+    cadeaubonnen: d.cadeaubonnen,
+    autoFinalizeLog: d.autoFinalizeLog,
+    burcuAkcayDemo: d.burcuAkcayDemo,
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(light));
+  localStorage.removeItem(APPOINTMENTS_STORAGE_KEY);
+}
+
 function isQuotaError(e) {
   return e && (e.name === 'QuotaExceededError' || e.code === 22);
 }
@@ -336,6 +366,17 @@ function isQuotaError(e) {
 function safeSaveData(d, opts = {}) {
   const quiet = !!opts.quiet;
   invalidateAppointmentsIndex();
+
+  if (usesServerAsPrimaryStorage()) {
+    try {
+      saveLightLocalCache(d);
+      return true;
+    } catch (e) {
+      if (!quiet) console.warn('[Salon] light cache save:', e);
+      return false;
+    }
+  }
+
   const appts = Array.isArray(d.appointments) ? d.appointments : [];
   const main = { ...d };
   delete main.appointments;
@@ -383,16 +424,15 @@ function safeSaveData(d, opts = {}) {
     return true;
   } catch (e3) {
     if (!quiet) {
-      showToast('Opslaan mislukt: te veel data voor deze browser. Klik “Gegevens opnieuw laden”.');
+      console.warn('[Salon] safeSaveData quota — data staat op server:', e3);
     }
-    console.error('[Salon] safeSaveData quota:', e3);
     return false;
   }
 }
 
-function saveData(d) {
+function saveData(d, opts = {}) {
   invalidateAppointmentsIndex();
-  safeSaveData(d, { quiet: false });
+  safeSaveData(d, opts);
   scheduleServerDatabaseSave();
 }
 
@@ -479,6 +519,18 @@ function updateVersionLabels() {
   const appLbl = $('#appVersionLabel');
   if (loginLbl) loginLbl.textContent = label;
   if (appLbl) appLbl.textContent = label;
+  initMobileSiteBar();
+}
+
+function initMobileSiteBar() {
+  const bar = $('#mobileSiteBar');
+  if (!bar) return;
+  const urlEl = bar.querySelector('.mobile-site-url');
+  if (urlEl) {
+    const host = location.hostname || 'agenda.eliminstituut.nl';
+    urlEl.textContent = host;
+    urlEl.href = `${location.protocol}//${host}${location.pathname}`;
+  }
 }
 
 function refreshActiveView() {
@@ -555,8 +607,8 @@ async function loadDatabaseFromServerChunked(opts = {}) {
     DB = applyDataDefaults(DB);
     invalidateAppointmentsIndex();
     repairPersonalBlockAppointments({ quiet: true });
-    safeSaveData(DB, { quiet: true });
     serverSync.enabled = true;
+    safeSaveData(DB, { quiet: true });
     serverSync.lastError = '';
     serverSync.counts = metaData.counts || {
       clients: DB.clients.length,
@@ -564,9 +616,7 @@ async function loadDatabaseFromServerChunked(opts = {}) {
     };
     localStorage.setItem(SALON_SERVER_SYNC_PREF, 'on');
     localStorage.setItem(SALON_SERVER_REVISION_KEY, String(serverSync.revision));
-    if (!opts.quiet) {
-      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
-    }
+    if (!opts.quiet) hideLoadProgress();
     return true;
   } catch (e) {
     serverSync.lastError = e.message || String(e);
@@ -601,11 +651,10 @@ async function loadDatabaseFromServer(opts = {}) {
       return false;
     }
     applyServerPayload(data);
-    serverSync.enabled = true;
     serverSync.lastError = '';
     localStorage.setItem(SALON_SERVER_SYNC_PREF, 'on');
     if (!opts.quiet) {
-      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
+      hideLoadProgress();
     }
     return true;
   } catch (e) {
@@ -819,9 +868,6 @@ async function startAppAfterLogin() {
       renderAgenda();
       renderHome();
       refreshActiveView();
-      if ((DB.clients || []).length > 100) {
-        showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
-      }
     } finally {
       serverSync.loading = false;
       hideLoadProgress();
@@ -850,6 +896,8 @@ function applyServerPayload(payload) {
     clients: (DB.clients || []).length,
     appointments: (DB.appointments || []).length,
   };
+  if (!DB.settings.email) DB.settings.email = 'eliminstituut@gmail.com';
+  serverSync.enabled = true;
   safeSaveData(DB, { quiet: true });
   return true;
 }
@@ -1169,9 +1217,12 @@ function searchClients(q) {
    MAILTO helpers
    ========================================================= */
 function openMailto(to, subject, body, bcc) {
+  const salonEmail = (DB.settings?.email || '').trim();
+  const autoBcc = DB.settings?.bccCopy && salonEmail ? salonEmail : '';
+  const finalBcc = bcc || autoBcc;
   let qs = `subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  if (bcc) qs += `&bcc=${encodeURIComponent(bcc)}`;
-  window.location.href = `mailto:${encodeURIComponent(to||'')}?${qs}`;
+  if (finalBcc) qs += `&bcc=${encodeURIComponent(finalBcc)}`;
+  window.location.href = `mailto:${encodeURIComponent(to || '')}?${qs}`;
 }
 function buildConfirmationBody(client, appointment) {
   const t = getTemplate('appt_confirmation');
@@ -5561,7 +5612,8 @@ function renderBedrijfsgegevens() {
           <div class="dos-row"><label>Postcode</label><input type="text" name="postal" value="${escapeHtml(s.postal||'')}"></div>
           <div class="dos-row"><label>Plaats</label><input type="text" name="city" value="${escapeHtml(s.city||'')}"></div>
           <div class="dos-row"><label>Telefoon</label><input type="text" name="phone" value="${escapeHtml(s.phone||'')}"></div>
-          <div class="dos-row"><label>E-mail</label><input type="email" name="email" value="${escapeHtml(s.email||'')}"></div>
+          <div class="dos-row"><label>E-mail (afzender voor mail)</label><input type="email" name="email" value="${escapeHtml(s.email||'eliminstituut@gmail.com')}" placeholder="eliminstituut@gmail.com"></div>
+          <p class="form-hint" style="margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.45;">Herinneringen en facturen openen in je mail-app (Gmail op telefoon). Zet dit adres als standaard in Gmail/Mail — volledig automatisch verzenden kan later via server-mail.</p>
           <div class="dos-row"><label>Website</label><input type="text" name="website" value="${escapeHtml(s.website||'')}"></div>
 
           <h3 class="dos-section-title">Fiscale gegevens</h3>
@@ -5809,7 +5861,6 @@ function renderDataPanel() {
       renderClients($('#searchClient')?.value || '');
       renderAgenda();
       renderHome();
-      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
     });
   });
 }
