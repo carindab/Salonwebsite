@@ -9,8 +9,8 @@ require_once __DIR__ . '/lib/phpmailer/PHPMailer.php';
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception as MailException;
 
-/** Gmail SMTP — PHPMailer met SSL :465 en STARTTLS :587 (Hostinger). */
-function salon_smtp_send(string $to, string $subject, string $bodyPlain, ?string $bcc = null): array
+/** @param array<int, array{content:string, filename:string, mime?:string}> $attachments */
+function salon_smtp_send(string $to, string $subject, string $bodyPlain, ?string $bcc = null, array $attachments = []): array
 {
     salon_load_mail_config();
     if (!defined('SALON_SMTP_USER') || !defined('SALON_SMTP_PASS') || SALON_SMTP_USER === '') {
@@ -46,7 +46,8 @@ function salon_smtp_send(string $to, string $subject, string $bodyPlain, ?string
             $to,
             $subject,
             $bodyPlain,
-            $bcc
+            $bcc,
+            $attachments
         );
         if ($r['ok']) {
             return $r;
@@ -79,7 +80,8 @@ function salon_smtp_send_phpmailer(
     string $to,
     string $subject,
     string $bodyPlain,
-    ?string $bcc
+    ?string $bcc,
+    array $attachments = []
 ): array {
     $mail = new PHPMailer(true);
     try {
@@ -97,6 +99,15 @@ function salon_smtp_send_phpmailer(
         $mail->addAddress($to);
         if ($bcc && filter_var($bcc, FILTER_VALIDATE_EMAIL)) {
             $mail->addBCC($bcc);
+        }
+        foreach ($attachments as $att) {
+            $content = (string) ($att['content'] ?? '');
+            $filename = (string) ($att['filename'] ?? 'bijlage');
+            if ($content === '') {
+                continue;
+            }
+            $mime = (string) ($att['mime'] ?? 'application/octet-stream');
+            $mail->addStringAttachment($content, $filename, PHPMailer::ENCODING_BASE64, $mime);
         }
         $mail->Subject = $subject;
         $mail->Body = $bodyPlain;

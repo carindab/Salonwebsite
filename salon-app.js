@@ -4225,20 +4225,24 @@ function buildDefaultInvoiceHTML(a, c, s) {
   `;
 }
 
+function buildFactuurHtmlDocument(a, c) {
+  const inner = a.invoiceHtml || buildDefaultInvoiceHTML(a, c, DB.settings);
+  const num = a.invoiceNumber || 'factuur';
+  return `<!DOCTYPE html><html lang="nl"><head><meta charset="utf-8"><title>Factuur ${num}</title>
+  <style>${getInvoiceDocumentCSS()}</style></head>
+  <body><div class="factuur-paper">${inner}</div></body></html>`;
+}
+
 function downloadFactuurHtmlBijlage(apptId) {
   const a = DB.appointments.find(x => x.id === apptId);
   if (!a) return;
   const c = findClient(a.clientId);
-  const inner = a.invoiceHtml || buildDefaultInvoiceHTML(a, c, DB.settings);
-  const num = a.invoiceNumber || 'factuur';
-  const html = `<!DOCTYPE html><html lang="nl"><head><meta charset="utf-8"><title>Factuur ${num}</title>
-  <style>${getInvoiceDocumentCSS()}</style></head>
-  <body><div class="factuur-paper">${inner}</div></body></html>`;
+  const html = buildFactuurHtmlDocument(a, c);
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const u = URL.createObjectURL(blob);
   const l = document.createElement('a');
   l.href = u;
-  l.download = `Factuur-${num}.html`;
+  l.download = `Factuur-${a.invoiceNumber || 'factuur'}.html`;
   l.click();
   setTimeout(() => URL.revokeObjectURL(u), 2000);
 }
@@ -4346,15 +4350,53 @@ function renderFactuurPage() {
     renderFactuurPage();
   });
 
-  $('#facMail').addEventListener('click', () => {
+  $('#facMail').addEventListener('click', async () => {
     if (!c?.email) { showToast('Geen e-mailadres bekend voor deze klant'); return; }
-    downloadFactuurHtmlBijlage(a.id);
     const ctx = { client: c, appointment: a, factuurnummer: a.invoiceNumber, totaal: fmtMoney(totaal), betaalwijze: getBetaalwijzeLabel(a.betaalwijze||'pin') };
     const m = buildInvoiceEmail(c, a, ctx);
     const bcc = s.bccCopy && s.email ? s.email : '';
+    const btn = $('#facMail');
+    const base = getSalonApiBase();
+
+    if (base && hasServerAccess()) {
+      btn.disabled = true;
+      try {
+        const stRes = await salonApiFetch(`${base}/mail-status.php`, { cache: 'no-store' });
+        const st = await stRes.json();
+        if (st.ok && st.configured) {
+          const sendRes = await salonApiFetch(`${base}/send-invoice.php`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: c.email,
+              subject: m.subject,
+              body: m.body,
+              bcc,
+              filename: `Factuur-${a.invoiceNumber}.html`,
+              attachmentHtml: buildFactuurHtmlDocument(a, c),
+            }),
+          });
+          const send = await sendRes.json();
+          if (send.ok) {
+            logSentMessage(c.id, 'factuur', m.subject);
+            showToast(`Factuur verzonden naar ${c.email} ✓`);
+            return;
+          }
+          showToast('Verzenden mislukt: ' + (send.error || 'onbekend'));
+          return;
+        }
+      } catch (e) {
+        showToast('Verzenden mislukt: ' + (e.message || e));
+        return;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    downloadFactuurHtmlBijlage(a.id);
     logSentMessage(c.id, 'factuur', m.subject);
     openMailto(c.email, m.subject, m.body, bcc);
-    showToast('E-mail opent met tekst vóór de afspraak. Het factuurbestand (Factuur-'+a.invoiceNumber+'.html) staat in Downloads — voeg toe als PDF (Afdrukken in browser) of als bijlage.');
+    showToast('E-mail opent in je mail-app. Factuur staat in Downloads — voeg toe als bijlage.');
   });
 }
 
@@ -5630,7 +5672,7 @@ function renderBedrijfsgegevens() {
           <div class="dos-row"><label>Plaats</label><input type="text" name="city" value="${escapeHtml(s.city||'')}"></div>
           <div class="dos-row"><label>Telefoon</label><input type="text" name="phone" value="${escapeHtml(s.phone||'')}"></div>
           <div class="dos-row"><label>E-mail (afzender voor mail)</label><input type="email" name="email" value="${escapeHtml(s.email||'eliminstituut@gmail.com')}" placeholder="eliminstituut@gmail.com"></div>
-          <p class="form-hint" style="margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.45;">Herinneringen en facturen openen in je mail-app (Gmail op telefoon). Zet dit adres als standaard in Gmail/Mail — volledig automatisch verzenden kan later via server-mail.</p>
+          <p class="form-hint" style="margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.45;">Herinneringen (~24u van tevoren) en facturen worden automatisch via Gmail verstuurd zodra Gmail gekoppeld is.</p>
           <div class="dos-row"><label>Website</label><input type="text" name="website" value="${escapeHtml(s.website||'')}"></div>
 
           <h3 class="dos-section-title">Fiscale gegevens</h3>
