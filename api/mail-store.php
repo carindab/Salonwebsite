@@ -34,7 +34,7 @@ function salon_build_mail_config_php(
     string $cronKey
 ): string {
     $host = 'smtp.gmail.com';
-    $port = 587;
+    $port = 465;
     $userEsc = addslashes($smtpUser);
     $passEsc = addslashes($smtpPass);
     $fromEsc = addslashes($fromEmail);

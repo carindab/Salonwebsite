@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/config-store.php';
 require_once __DIR__ . '/mail-store.php';
+require_once __DIR__ . '/smtp-mail.php';
 
 $installKey = 'tijdelijk-installatie-wachtwoord';
 $key = (string) ($_GET['key'] ?? $_POST['key'] ?? '');
@@ -37,7 +38,7 @@ function mail_setup_html(string $title, string $body): void
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string) ($_POST['action'] ?? 'save');
     $gmail = trim((string) ($_POST['gmail'] ?? 'eliminstituut@gmail.com'));
-    $appPass = (string) ($_POST['app_pass'] ?? '');
+    $appPass = salon_normalize_app_password((string) ($_POST['app_pass'] ?? ''));
     $fromName = trim((string) ($_POST['from_name'] ?? 'Elim Instituut'));
 
     if ($action === 'test') {
@@ -46,6 +47,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($appPass !== '') {
             $cronKey = salon_read_cron_key();
             salon_write_mail_config(salon_build_mail_config_php($gmail, $appPass, $gmail, $fromName, $cronKey));
+        } elseif (!salon_mail_configured()) {
+            mail_setup_html('Test mislukt', '<p class="err">Vul het Gmail app-wachtwoord in (16 tekens, zonder spaties).</p>' . mail_setup_form($key));
         }
         salon_load_mail_config();
         $testTo = $gmail;
@@ -88,7 +91,7 @@ function mail_setup_form(string $key): string
         . '<form method="post">'
         . '<input type="hidden" name="key" value="' . htmlspecialchars($key) . '">'
         . '<label>Gmail-adres</label><input type="email" name="gmail" value="eliminstituut@gmail.com" required>'
-        . '<label>App-wachtwoord (16 tekens)</label><input type="password" name="app_pass" autocomplete="new-password" placeholder="xxxx xxxx xxxx xxxx">'
+        . '<label>App-wachtwoord (16 tekens, zonder spaties)</label><input type="password" name="app_pass" autocomplete="new-password" placeholder="abcdefghijklmnop">'
         . '<label>Naam afzender</label><input type="text" name="from_name" value="Elim Instituut">'
         . '<button type="submit" name="action" value="save">Opslaan</button> '
         . '<button type="submit" name="action" value="test" style="background:#8b7355;margin-left:8px">Testmail sturen</button>'

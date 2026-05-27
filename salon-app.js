@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v41 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v41';
-const BUILD_LABEL = '27 mei 2026 · herinneringen + mobiel';
+console.log('%c[Salon Beheer] salon-app.js v42 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v42';
+const BUILD_LABEL = '27 mei 2026 · mail SSL fix';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
