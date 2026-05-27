@@ -317,6 +317,10 @@ for (const order of orders.values()) {
   }
   if (!items.length) continue;
 
+  const lineTotal = items.reduce((s, it) => s + (it.qty || 1) * (it.price || 0), 0);
+  const orderPrijs = parseMoney(r(order.rows[0], vH, "orderprijs"));
+  const orderTotal = lineTotal > 0 && orderPrijs > 0 ? orderPrijs : lineTotal > 0 ? lineTotal : 0;
+
   seq++;
   const isFuture = date >= TODAY;
   appointments.push({
@@ -328,6 +332,7 @@ for (const order of orders.values()) {
     paid: !isFuture,
     notes: r(order.rows[0], vH, "opmerkingen") || "Elim v2 import",
     items,
+    orderTotal,
     importTag: "elim-v2",
     importOrderId: order.oid,
   });

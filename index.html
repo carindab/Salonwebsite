@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Salon Beheer</title>
-  <link rel="stylesheet" href="styles.css?v=18" />
+  <link rel="stylesheet" href="styles.css?v=19" />
 </head>
 <body>
   <!-- Login (Hostinger) -->
@@ -15,7 +15,7 @@
     <div class="login-card">
       <div class="login-brand">Elim Instituut</div>
       <h1 class="login-title">Agenda &amp; klanten</h1>
-      <p class="login-sub">Alleen voor ingelogde medewerkers</p>
+      <p class="login-sub">Alleen voor ingelogde medewerkers · <span id="loginVersionLabel">v63</span></p>
       <form id="loginForm" class="login-form" autocomplete="on">
         <label class="login-label" for="loginEmail">E-mail</label>
         <input class="login-input" type="email" id="loginEmail" name="email" required autocomplete="username" inputmode="email" />
@@ -85,6 +85,7 @@
           <span class="nav-icon">🔧</span><span class="nav-label">Instellingen</span>
         </a>
       </nav>
+      <div class="sidebar-version" id="appVersionLabel" title="Versie van de app"></div>
       <div class="sidebar-footer">
         <button class="icon-btn" title="Hulp">💬</button>
         <button class="icon-btn" title="Voorkeuren" id="quickSettings">⚙</button>
@@ -455,6 +456,6 @@
   <!-- Toast -->
   <div class="toast hidden" id="toast"></div>
 
-  <script src="salon-app.js?v=62"></script>
+  <script src="salon-app.js?v=63"></script>
 </body>
 </html>

@@ -158,6 +158,13 @@ button { font-family: inherit; cursor: pointer; }
 .week-chip.werk { background: #e3f1e5; color: #3f7a44; }
 .week-chip.vrij { background: #f5dcd9; color: #a73f34; }
 
+.sidebar-version {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 8px 16px 0;
+  line-height: 1.35;
+}
+
 .sidebar-footer {
   display: flex;
   gap: 10px;

@@ -3,8 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v36 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v36';
+console.log('%c[Salon Beheer] salon-app.js v37 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v37';
+const BUILD_LABEL = '27 mei 2026 · rapportage + omzetfix';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -406,6 +407,7 @@ const serverSync = {
   enabled: false,
   available: false,
   saving: false,
+  loading: false,
   saveTimer: null,
   revision: Number(localStorage.getItem(SALON_SERVER_REVISION_KEY) || 0) || 0,
   lastError: '',
@@ -463,6 +465,40 @@ function showLoadProgress(msg) {
   if (!t) return;
   t.textContent = msg;
   t.classList.remove('hidden');
+}
+
+function hideLoadProgress() {
+  const t = $('#toast');
+  if (!t) return;
+  if (/laden/i.test(t.textContent || '')) t.classList.add('hidden');
+}
+
+function updateVersionLabels() {
+  const label = `${APP_VERSION} · ${BUILD_LABEL}`;
+  const loginLbl = $('#loginVersionLabel');
+  const appLbl = $('#appVersionLabel');
+  if (loginLbl) loginLbl.textContent = label;
+  if (appLbl) appLbl.textContent = label;
+}
+
+function refreshActiveView() {
+  const visible = document.querySelector('.view:not(.hidden)[data-view]');
+  if (!visible) return;
+  const name = visible.dataset.view;
+  try {
+    if (name === 'home') renderHome();
+    else if (name === 'agenda') renderAgenda();
+    else if (name === 'klanten') renderClients($('#searchClient')?.value || '');
+    else if (name === 'rapportage') {
+      const activeTab = document.querySelector('[data-view="rapportage"] .beheer-tab.active');
+      switchRapportageTab(activeTab?.dataset?.tab || 'dagrapport');
+    } else if (name === 'beheer') {
+      const activeTab = document.querySelector('[data-view="beheer"] .beheer-tab.active');
+      if (activeTab) switchBeheerTab(activeTab.dataset.tab);
+    }
+  } catch (e) {
+    console.warn('[Salon] refreshActiveView:', e);
+  }
 }
 
 async function loadDatabaseFromServerChunked(opts = {}) {
@@ -742,6 +778,7 @@ function repairPersonalBlockAppointments(options = {}) {
 
 async function startAppAfterLogin() {
   $('#brandName').textContent = DB.settings.salonName || 'Salon';
+  updateVersionLabels();
   showView('home');
 
   const hadLocal = (DB.clients || []).length > 50;
@@ -759,27 +796,35 @@ async function startAppAfterLogin() {
   renderHome();
 
   void (async () => {
-    const synced = await initServerDatabaseSync();
-    if (synced && (DB.clients || []).length < 50) {
-      showToast('Database is leeg — klanten worden geïmporteerd…');
-      await importSeedToServerDatabase(true);
-      await loadDatabaseFromServer({ quiet: true });
-    }
-    if (!synced && (DB.clients || []).length === 0) {
-      await bootstrapSalonFromHostedSeed(true);
-      await tryMergeBundledElimCsv();
-      await tryMergeBundledSalonwareStats();
-    }
-    if ((DB.clients || []).length < 50 && getSalonApiBase()) {
-      showToast('Weinig data — open Instellingen → Data → Seed naar database importeren');
-    }
-    const repaired = repairPersonalBlockAppointments({ quiet: true });
-    if (repaired) saveData(DB, { quiet: true });
-    renderClients($('#searchClient')?.value || '');
-    renderAgenda();
-    renderHome();
-    if ((DB.clients || []).length > 100) {
-      showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
+    serverSync.loading = true;
+    try {
+      const synced = await initServerDatabaseSync();
+      if (synced && (DB.clients || []).length < 50) {
+        showToast('Database is leeg — klanten worden geïmporteerd…');
+        await importSeedToServerDatabase(true);
+        await loadDatabaseFromServer({ quiet: true });
+      }
+      if (!synced && (DB.clients || []).length === 0) {
+        await bootstrapSalonFromHostedSeed(true);
+        await tryMergeBundledElimCsv();
+        await tryMergeBundledSalonwareStats();
+      }
+      await patchAppointmentOrderTotalsFromSeed();
+      if ((DB.clients || []).length < 50 && getSalonApiBase()) {
+        showToast('Weinig data — open Instellingen → Data → Seed naar database importeren');
+      }
+      const repaired = repairPersonalBlockAppointments({ quiet: true });
+      if (repaired) saveData(DB, { quiet: true });
+      renderClients($('#searchClient')?.value || '');
+      renderAgenda();
+      renderHome();
+      refreshActiveView();
+      if ((DB.clients || []).length > 100) {
+        showToast(`${DB.clients.length} klanten · ${DB.appointments.length} afspraken geladen`);
+      }
+    } finally {
+      serverSync.loading = false;
+      hideLoadProgress();
     }
   })();
 }
@@ -930,12 +975,18 @@ async function initServerDatabaseSync() {
   if (!hasServerAccess() && !getSalonApiBase()) return false;
 
   serverSync.enabled = true;
-  const loaded = await loadDatabaseFromServer({ quiet: true });
-  if (loaded && (DB.clients || []).length > 50) {
-    console.log('[Salon] MySQL sync actief:', serverSync.counts);
-    return true;
+  serverSync.loading = true;
+  try {
+    const loaded = await loadDatabaseFromServer({ quiet: true });
+    if (loaded && (DB.clients || []).length > 50) {
+      console.log('[Salon] MySQL sync actief:', serverSync.counts);
+      return true;
+    }
+    return loaded;
+  } finally {
+    serverSync.loading = false;
+    hideLoadProgress();
   }
-  return loaded;
 }
 
 function migrateSettingsAnbos(s, def) {
@@ -1185,8 +1236,21 @@ const fmtDate = (iso) => {
 };
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+function appointmentLineTotal(a) {
+  return (a.items || []).reduce((sum, it) => sum + (it.qty || 1) * (it.price || 0), 0);
+}
+
+/** Salonware-rapportage: orderprijs als die er is; €0-regels tellen niet mee voor omzet. */
+function appointmentReportTotal(a) {
+  const lines = appointmentLineTotal(a);
+  if (lines <= 0) return 0;
+  const orderTotal = Number(a.orderTotal);
+  const base = orderTotal > 0 ? orderTotal : lines;
+  return Math.max(0, base - (a.korting || 0));
+}
+
 function appointmentTotal(a) {
-  return (a.items || []).reduce((sum, it) => sum + (it.qty || 0) * (it.price || 0), 0);
+  return appointmentLineTotal(a);
 }
 function clientFullName(c) {
   if (!c) return '?';
@@ -3353,6 +3417,41 @@ function bootstrapSalonFromHostedSeed(force) {
     });
 }
 
+/** Zet orderTotal (Salonware orderprijs) op geïmporteerde afspraken — corrigeert omzet 2025 e.d. */
+async function patchAppointmentOrderTotalsFromSeed() {
+  if (location.protocol === 'file:') return false;
+  try {
+    const res = await fetch(`salon-seed.json?v=${encodeURIComponent(SALON_SEED_VERSION)}`, { cache: 'no-store' });
+    if (!res.ok) return false;
+    const seed = await res.json();
+    if (!seed?.appointments?.length) return false;
+    const byOrder = new Map();
+    seed.appointments.forEach(a => {
+      if (a.importOrderId != null && a.orderTotal != null) {
+        byOrder.set(String(a.importOrderId), Number(a.orderTotal));
+      }
+    });
+    if (!byOrder.size) return false;
+    let patched = 0;
+    (DB.appointments || []).forEach(a => {
+      if (a.importOrderId == null) return;
+      const ot = byOrder.get(String(a.importOrderId));
+      if (ot == null || a.orderTotal === ot) return;
+      a.orderTotal = ot;
+      patched++;
+    });
+    if (patched) {
+      safeSaveData(DB, { quiet: true });
+      console.log('[Salon] orderTotal bijgewerkt op', patched, 'afspraken');
+      if (serverSync.enabled) await saveDatabaseToServer({ quiet: true });
+    }
+    return patched > 0;
+  } catch (e) {
+    console.warn('[Salon] orderTotal patch:', e && e.message);
+    return false;
+  }
+}
+
 function normalizeDate(s) {
   if (!s) return '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
@@ -4878,8 +4977,8 @@ function getPeriodRange(f) {
   const isPartialPeriod = endISO > today && startISO <= today;
   const effectiveEndISO = endISO > today ? today : endISO;
   let titleSuffix = '';
-  if (isPartialPeriod) titleSuffix = ` (tot ${fmtDate(effectiveEndISO)})`;
-  else if (isFuturePeriod) titleSuffix = ' (ingepland + afgerond)';
+  if (isPartialPeriod) titleSuffix = ` (afgerond t/m ${fmtDate(effectiveEndISO)} + ingepland)`;
+  else if (isFuturePeriod) titleSuffix = ' (verwacht: ingepland)';
   return {
     startISO,
     endISO,
@@ -5103,16 +5202,21 @@ function renderBestedingen() {
   const f = reportFilters.bestedingen;
   const range = getPeriodRange(f);
   const trans = filterReportAppointments(range);
+  const today = todayLocalISO();
 
-  const totalOmzet = trans.reduce((s,a) => s + appointmentTotal(a) - (a.korting||0), 0);
-  const uniqueClients = new Set(trans.map(a=>a.clientId)).size;
+  const totalOmzet = trans.reduce((s, a) => s + appointmentReportTotal(a), 0);
+  const afgerondTrans = trans.filter(a => a.date <= today && a.status === 'afgerond');
+  const geplandTrans = trans.filter(a => a.date > today && a.status === 'gepland');
+  const omzetAfgerond = afgerondTrans.reduce((s, a) => s + appointmentReportTotal(a), 0);
+  const omzetGepland = geplandTrans.reduce((s, a) => s + appointmentReportTotal(a), 0);
+  const uniqueClients = new Set(trans.map(a => a.clientId)).size;
 
-  const allItems = trans.flatMap(a => (a.items||[]).map(it => ({ ...it, _aid:a.id, _cid:a.clientId })));
-  const beh = allItems.filter(it=>it.kind==='treatment');
-  const prod = allItems.filter(it=>it.kind==='product');
-  const omzetBeh  = beh.reduce((s,it)=>s+(it.qty||1)*(it.price||0),0);
-  const omzetProd = prod.reduce((s,it)=>s+(it.qty||1)*(it.price||0),0);
-  const totalCalc = omzetBeh + omzetProd;
+  const allItems = trans.flatMap(a => (a.items || []).map(it => ({ ...it, _aid: a.id, _cid: a.clientId })));
+  const beh = allItems.filter(it => it.kind === 'treatment');
+  const prod = allItems.filter(it => it.kind === 'product');
+  const omzetBeh = beh.reduce((s, it) => s + (it.qty || 1) * (it.price || 0), 0);
+  const omzetProd = prod.reduce((s, it) => s + (it.qty || 1) * (it.price || 0), 0);
+  const totalCalc = totalOmzet;
 
   const behVisits = new Set(beh.map(it=>it._aid)).size;
   const prodVisits = new Set(prod.map(it=>it._aid)).size;
@@ -5133,7 +5237,9 @@ function renderBestedingen() {
         <div class="rap-stats">
           <div class="rap-stat"><span class="rap-stat-label">Aantal bezoeken</span><span class="rap-stat-value">${trans.length}</span></div>
           <div class="rap-stat"><span class="rap-stat-label">Aantal klanten</span><span class="rap-stat-value">${uniqueClients}</span></div>
-          <div class="rap-stat"><span class="rap-stat-label">Omzet</span><span class="rap-stat-value">${fmtMoney(totalCalc)}</span></div>
+          <div class="rap-stat"><span class="rap-stat-label">Omzet totaal</span><span class="rap-stat-value">${fmtMoney(totalCalc)}</span></div>
+          ${omzetGepland > 0 ? `<div class="rap-stat"><span class="rap-stat-label">Waarvan afgerond</span><span class="rap-stat-value">${fmtMoney(omzetAfgerond)}</span></div>
+          <div class="rap-stat"><span class="rap-stat-label">Waarvan ingepland</span><span class="rap-stat-value">${fmtMoney(omzetGepland)}</span></div>` : ''}
         </div>
         <table class="data-table rap-table">
           <thead><tr><th>Soort</th><th>Totaal aantal</th><th>Aantal bezoeken</th><th>Aantal klanten</th><th class="amount">Omzet</th></tr></thead>
@@ -5198,6 +5304,7 @@ function renderOmzetCategorie() {
   const entries = Object.entries(byCat).sort((x,y)=>y[1].revenue-x[1].revenue);
   const totVisits = new Set(trans.map(a=>a.id)).size;
   const totClients = new Set(trans.map(a=>a.clientId)).size;
+  const totalRevAppt = trans.reduce((s, a) => s + appointmentReportTotal(a), 0);
 
   const slices = entries.map(([cat,v]) => ({ label: cat, value: v.revenue }));
 
@@ -5211,7 +5318,7 @@ function renderOmzetCategorie() {
         <div class="rap-stats">
           <div class="rap-stat"><span class="rap-stat-label">Aantal bezoeken</span><span class="rap-stat-value">${totVisits}</span></div>
           <div class="rap-stat"><span class="rap-stat-label">Aantal klanten</span><span class="rap-stat-value">${totClients}</span></div>
-          <div class="rap-stat"><span class="rap-stat-label">Omzet</span><span class="rap-stat-value">${fmtMoney(totalRev)}</span></div>
+          <div class="rap-stat"><span class="rap-stat-label">Omzet</span><span class="rap-stat-value">${fmtMoney(totalRevAppt)}</span></div>
         </div>
         <table class="data-table rap-table">
           <thead><tr><th>Categorie</th><th>Totaal aantal</th><th>Aantal bezoeken</th><th>Aantal klanten</th><th class="amount">Omzet</th></tr></thead>
@@ -5291,6 +5398,7 @@ function renderOmzetDienst() {
 
   const totVisits = new Set(trans.map(a=>a.id)).size;
   const totClients = new Set(trans.map(a=>a.clientId)).size;
+  const totalRevAppt = trans.reduce((s, a) => s + appointmentReportTotal(a), 0);
 
   const slices = Object.entries(byCat)
     .map(([cat,items]) => ({ label: cat, value: items.reduce((s,i)=>s+i.revenue,0) }))
@@ -5306,7 +5414,7 @@ function renderOmzetDienst() {
         <div class="rap-stats">
           <div class="rap-stat"><span class="rap-stat-label">Aantal bezoeken</span><span class="rap-stat-value">${totVisits}</span></div>
           <div class="rap-stat"><span class="rap-stat-label">Aantal klanten</span><span class="rap-stat-value">${totClients}</span></div>
-          <div class="rap-stat"><span class="rap-stat-label">Omzet</span><span class="rap-stat-value">${fmtMoney(totalRev)}</span></div>
+          <div class="rap-stat"><span class="rap-stat-label">Omzet</span><span class="rap-stat-value">${fmtMoney(totalRevAppt)}</span></div>
         </div>
 
         ${Object.entries(byCat).length ? Object.entries(byCat).map(([cat,items]) => {
