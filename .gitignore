@@ -2,4 +2,5 @@ dist/
 node_modules/
 api/config.php
 salon-config.php
+cron-logs/
 .DS_Store

@@ -51,6 +51,13 @@ for (const d of DIRS) {
   copyDir(path.join(ROOT, d), path.join(OUT, d));
 }
 
+const scriptsDir = path.join(ROOT, "scripts");
+if (fs.existsSync(path.join(scriptsDir, "send-reminders.sh"))) {
+  const outScripts = path.join(OUT, "scripts");
+  fs.mkdirSync(outScripts, { recursive: true });
+  copyFile(path.join(scriptsDir, "send-reminders.sh"), path.join(outScripts, "send-reminders.sh"));
+}
+
 copyFile(path.join(ROOT, "api", "config.example.php"), path.join(OUT, "api", "config.example.php"));
 
 const mb = fs.statSync(path.join(OUT, "salon-seed.json")).size / 1024 / 1024;

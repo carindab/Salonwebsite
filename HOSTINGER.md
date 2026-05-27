@@ -180,9 +180,10 @@ Vanaf nu:
 4. Vul Gmail + app-wachtwoord in → **Testmail sturen**
 5. In Hostinger **Cron Jobs** (elk uur):
    ```
-   0 * * * * curl -s "https://agenda.eliminstituut.nl/api/send-reminders.php?key=JOUW_CRON_KEY"
+   0 * * * * /bin/sh /home/u721044854/domains/agenda.eliminstituut.nl/public_html/scripts/send-reminders.sh
    ```
-   De cron-URL staat op het scherm na opslaan in setup-mail.
+   Script staat in `public_html/scripts/send-reminders.sh` (zie Hostinger support of `scripts/send-reminders.sh` in repo).
+   Log: `public_html/cron-logs/send-reminders.log`
 
 Herinneringen gaan naar klanten met status **gepland** en een e-mailadres, ~24 uur voor de afspraak.
 
