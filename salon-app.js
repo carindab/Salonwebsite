@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v77 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v77';
-const BUILD_LABEL = '20 mei 2026 · verplaatsen opslaan fix';
+console.log('%c[Salon Beheer] salon-app.js v78 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v78';
+const BUILD_LABEL = '20 mei 2026 · mobiel zoeklijst fix';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -1173,26 +1173,142 @@ function attachAutocomplete(input, getResults, onSelect, opts = {}) {
 
   let activeIdx = -1;
   let lastResults = [];
+  let portaled = false;
+  let touchMoved = false;
+  let touchStartY = 0;
+  let touchingDropdown = false;
+  let pickLockUntil = 0;
+
+  function isMobileAc() {
+    return window.matchMedia('(max-width: 900px)').matches;
+  }
+
+  function portalDropdown() {
+    if (!portaled && isMobileAc()) {
+      document.body.appendChild(dropdown);
+      portaled = true;
+      dropdown.classList.add('ac-fixed');
+    }
+  }
+
+  function unportalDropdown() {
+    if (portaled) {
+      wrap.appendChild(dropdown);
+      portaled = false;
+      dropdown.classList.remove('ac-fixed');
+    }
+  }
+
+  function hideDropdown() {
+    dropdown.style.display = 'none';
+    activeIdx = -1;
+    unportalDropdown();
+    detachPositionListeners();
+  }
+
+  function viewportTop() {
+    return window.visualViewport ? window.visualViewport.offsetTop : 0;
+  }
+  function viewportHeight() {
+    return window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  }
+
+  function positionDropdown() {
+    if (dropdown.style.display === 'none') return;
+    if (!isMobileAc()) {
+      dropdown.style.position = '';
+      dropdown.style.top = '';
+      dropdown.style.bottom = '';
+      dropdown.style.left = '';
+      dropdown.style.width = '';
+      dropdown.style.maxHeight = '';
+      return;
+    }
+    portalDropdown();
+    const rect = input.getBoundingClientRect();
+    const gap = 6;
+    const vvTop = viewportTop();
+    const vvBottom = vvTop + viewportHeight();
+    const spaceBelow = vvBottom - rect.bottom - gap;
+    const spaceAbove = rect.top - vvTop - gap;
+    const openBelow = spaceBelow >= 120 || spaceBelow >= spaceAbove;
+    const maxH = Math.max(120, Math.min(280, (openBelow ? spaceBelow : spaceAbove) - 12));
+
+    dropdown.style.left = `${Math.max(8, rect.left)}px`;
+    dropdown.style.width = `${Math.min(rect.width, window.innerWidth - 16)}px`;
+    dropdown.style.maxHeight = `${maxH}px`;
+    if (openBelow) {
+      dropdown.style.top = `${rect.bottom + gap}px`;
+      dropdown.style.bottom = 'auto';
+    } else {
+      dropdown.style.top = 'auto';
+      dropdown.style.bottom = `${window.innerHeight - rect.top + gap}px`;
+    }
+  }
+
+  let positionBound = false;
+  function onReposition() { positionDropdown(); }
+  function attachPositionListeners() {
+    if (positionBound) return;
+    positionBound = true;
+    window.visualViewport?.addEventListener('resize', onReposition);
+    window.visualViewport?.addEventListener('scroll', onReposition);
+    window.addEventListener('resize', onReposition);
+    input.closest('.modal-body')?.addEventListener('scroll', onReposition, { passive: true });
+  }
+  function detachPositionListeners() {
+    if (!positionBound) return;
+    positionBound = false;
+    window.visualViewport?.removeEventListener('resize', onReposition);
+    window.visualViewport?.removeEventListener('scroll', onReposition);
+    window.removeEventListener('resize', onReposition);
+    input.closest('.modal-body')?.removeEventListener('scroll', onReposition);
+  }
+
+  dropdown.addEventListener('mousedown', e => e.preventDefault());
+  dropdown.addEventListener('touchstart', e => {
+    touchingDropdown = true;
+    touchMoved = false;
+    touchStartY = e.touches[0]?.clientY ?? 0;
+  }, { passive: true });
+  dropdown.addEventListener('touchmove', e => {
+    const y = e.touches[0]?.clientY ?? touchStartY;
+    if (Math.abs(y - touchStartY) > 10) touchMoved = true;
+  }, { passive: true });
+  dropdown.addEventListener('touchend', () => {
+    setTimeout(() => { touchingDropdown = false; }, 280);
+  }, { passive: true });
+
+  function pickItem(idx, e) {
+    if (Date.now() < pickLockUntil) return;
+    if (touchMoved) return;
+    pickLockUntil = Date.now() + 350;
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    choose(idx);
+  }
 
   function renderResults(results) {
     lastResults = results;
-    if (!results.length) { dropdown.style.display = 'none'; return; }
+    if (!results.length) { hideDropdown(); return; }
     dropdown.innerHTML = results.map((r, i) => `
-      <div class="ac-item ${i===activeIdx?'active':''}" data-i="${i}">
+      <div class="ac-item ${i===activeIdx?'active':''}" data-i="${i}" role="option" aria-selected="${i===activeIdx}">
         <div class="ac-label">${escapeHtml(r.label)}</div>
         ${r.sub ? `<div class="ac-sub">${escapeHtml(r.sub)}</div>` : ''}
       </div>
     `).join('');
     dropdown.style.display = 'block';
+    attachPositionListeners();
+    positionDropdown();
     dropdown.querySelectorAll('.ac-item').forEach(el => {
-      const pick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        choose(Number(el.dataset.i));
-      };
-      el.addEventListener('mousedown', pick);
-      el.addEventListener('pointerdown', pick);
-      el.addEventListener('touchend', pick, { passive: false });
+      const idx = Number(el.dataset.i);
+      el.addEventListener('touchend', e => pickItem(idx, e), { passive: false });
+      el.addEventListener('click', e => {
+        if (e.pointerType === 'touch' || touchMoved) return;
+        pickItem(idx, e);
+      });
     });
   }
   function choose(idx) {
@@ -1200,14 +1316,13 @@ function attachAutocomplete(input, getResults, onSelect, opts = {}) {
     if (!item) return;
     if (opts.clearOnSelect !== false) input.value = '';
     else input.value = item.label;
-    dropdown.style.display = 'none';
-    activeIdx = -1;
+    hideDropdown();
     onSelect(item);
   }
 
   input.addEventListener('input', () => {
     const q = input.value.trim().toLowerCase();
-    if (!q) { dropdown.style.display = 'none'; return; }
+    if (!q) { hideDropdown(); return; }
     activeIdx = 0;
     renderResults(getResults(q).slice(0, 30));
   });
@@ -1221,13 +1336,18 @@ function attachAutocomplete(input, getResults, onSelect, opts = {}) {
       renderResults(getResults('').slice(0, 30));
     }
   });
-  input.addEventListener('blur', () => setTimeout(() => dropdown.style.display = 'none', 150));
+  input.addEventListener('blur', () => {
+    setTimeout(() => {
+      if (touchingDropdown) return;
+      hideDropdown();
+    }, 220);
+  });
   input.addEventListener('keydown', e => {
     if (dropdown.style.display === 'none') return;
     if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx+1, lastResults.length-1); renderResults(lastResults); }
     if (e.key === 'ArrowUp')   { e.preventDefault(); activeIdx = Math.max(activeIdx-1, 0); renderResults(lastResults); }
     if (e.key === 'Enter')     { e.preventDefault(); if (activeIdx>=0) choose(activeIdx); }
-    if (e.key === 'Escape')    { dropdown.style.display = 'none'; }
+    if (e.key === 'Escape')    { hideDropdown(); }
   });
 }
 

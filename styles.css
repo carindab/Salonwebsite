@@ -1940,12 +1940,21 @@ body.kopie-placing .agenda-day-apps .app-block {
   z-index: 1000;
   max-height: 320px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.ac-dropdown.ac-fixed {
+  position: fixed;
+  right: auto;
+  z-index: 650;
 }
 .ac-item {
   padding: 8px 12px;
   cursor: pointer;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 .ac-item:last-child { border-bottom: 0; }
 .ac-item:hover, .ac-item.active {
@@ -1959,6 +1968,23 @@ body.kopie-placing .agenda-day-apps .app-block {
   font-size: 12px;
   color: var(--muted);
   margin-top: 2px;
+}
+
+@media (max-width: 900px) {
+  .ac-dropdown {
+    touch-action: pan-y;
+    max-height: min(280px, 45dvh);
+  }
+  .ac-item {
+    min-height: 44px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 10px 14px;
+  }
+  .ac-item:active:not(.active) {
+    background: #f5f0ea;
+  }
 }
 
 /* =========================================================
