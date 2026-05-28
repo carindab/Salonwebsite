@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v74 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v74';
-const BUILD_LABEL = '27 mei 2026 · mobiel opslaan fix';
+console.log('%c[Salon Beheer] salon-app.js v75 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v75';
+const BUILD_LABEL = '27 mei 2026 · eigen afspraak zonder klant';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -1812,9 +1812,14 @@ function isAgendaFullDayBlock(a, dateISO) {
   return isAgendaDayOffBlock(a);
 }
 function agendaBlockClientLabel(a, c) {
-  const name = isPlaceholderClient(c) ? 'Onbekende klant' : clientFullName(c);
-  if (isAgendaFullDayBlock(a, a.date)) return `${a.time}: ${name}`;
-  return name;
+  if (!a.clientId || isPlaceholderClient(c)) {
+    const notes = (a.notes || '').trim();
+    if (notes && notes !== 'Elim v2 import') {
+      return notes.length > 48 ? notes.slice(0, 47) + '…' : notes;
+    }
+    return 'Eigen afspraak';
+  }
+  return clientFullName(c);
 }
 function isGenericPersonalLabel(text) {
   const s = (text || '').trim().toLowerCase();
@@ -1829,6 +1834,11 @@ function agendaPersonalNoteLine(a) {
   return '';
 }
 function agendaBlockServiceLabel(a) {
+  if (!(a.items || []).length) {
+    const notes = (a.notes || '').trim();
+    if (notes && notes !== 'Elim v2 import') return notes;
+    return 'Eigen afspraak';
+  }
   if (!isAgendaPersonalBlock(a)) return appointmentSummary(a);
   const note = agendaPersonalNoteLine(a);
   return note ? `Afspraak ${note}` : 'Afspraak';
@@ -1959,7 +1969,7 @@ function renderAgenda() {
     const c = findClient(a.clientId);
     const durMins = appointmentDurationMins(a);
     const fullDay = isAgendaFullDayBlock(a, dateISO);
-    const personal = isAgendaPersonalBlock(a) && !fullDay;
+    const personal = (isAgendaPersonalBlock(a) && !fullDay) || (!a.clientId && !fullDay);
     const cls = fullDay ? ' app-block--fullday' : (personal ? ' app-block--personal' : '');
     const serviceHtml = agendaBlockServiceHtml(a, fullDay, personal);
     return `<div class="app-block${cls}" data-app-id="${a.id}" data-date="${a.date}" data-time="${a.time}" style="top:${topPx}px;height:${heightPx}px;min-height:${Math.max(heightPx, personal ? 36 : 24)}px">
@@ -2099,10 +2109,12 @@ function openAppointmentModal(existing) {
           <h4>Klant</h4>
           ${!c ? `
             <div class="newappt-field">
-              <label>Selecteer een klant</label>
+              <label>Klant <span style="font-weight:400;color:var(--muted)">(optioneel)</span></label>
               <input type="text" id="naKlantSearch" placeholder="Typ naam, email of telefoon..." />
+              <p class="form-hint" style="margin:6px 0 0;font-size:12px;color:var(--muted);">Laat leeg voor een eigen afspraak — noteer in opmerkingen waar het over gaat.</p>
             </div>
-            <div class="newappt-row" style="margin-top:8px; gap:6px;">
+            <div class="newappt-row" style="margin-top:8px; gap:6px; flex-wrap:wrap;">
+              <button type="button" class="btn ghost small" id="naSkipClient">Eigen afspraak (geen klant)</button>
               <button type="button" class="btn primary small" id="naNewClient">+ Nieuwe klant maken</button>
             </div>
           ` : `
@@ -2135,7 +2147,7 @@ function openAppointmentModal(existing) {
             </select>
           </div>
           <div class="newappt-field newappt-field-block"><label>Opmerkingen</label>
-            <textarea id="naNotes" rows="3" placeholder="Bijv. tikkie verzoek...">${escapeHtml(working.notes||'')}</textarea>
+            <textarea id="naNotes" rows="3" placeholder="Bijv. eigen tijd, Angelie, administratie…">${escapeHtml(working.notes||'')}</textarea>
           </div>
 
           <div class="newappt-field newappt-field-block">
@@ -2172,7 +2184,7 @@ function openAppointmentModal(existing) {
             </table>
           </div>
 
-          ${working.items.length===0 ? `<div class="newappt-warn">⚠ Voeg een behandeling toe om op te kunnen slaan</div>` : ''}
+          ${working.items.length===0 && !(working.notes||'').trim() ? `<div class="newappt-warn">⚠ Voeg een behandeling toe of vul opmerkingen in (eigen afspraak)</div>` : ''}
         </div>
       </div>
 
@@ -2191,7 +2203,8 @@ function openAppointmentModal(existing) {
 
     const saveBtn = $('#naSave');
     if (saveBtn) {
-      const canSave = !!(c && working.items.length);
+      const notes = (working.notes || '').trim();
+      const canSave = working.items.length > 0 || notes.length > 0;
       saveBtn.classList.toggle('btn-incomplete', !canSave);
       saveBtn.setAttribute('aria-disabled', canSave ? 'false' : 'true');
     }
@@ -2200,9 +2213,12 @@ function openAppointmentModal(existing) {
   }
 
   async function saveAppointment() {
-    const c = findClient(working.clientId);
-    if (!c) return showToast('Selecteer eerst een klant (tik op naam in de lijst)');
-    if (!working.items.length) return showToast('Voeg minimaal één behandeling toe');
+    const c = working.clientId ? findClient(working.clientId) : null;
+    const notes = (working.notes || '').trim();
+    if (!working.items.length && !notes) {
+      return showToast('Voeg een behandeling toe of vul opmerkingen in');
+    }
+    if (!working.clientId) working.clientId = '';
 
     const btn = $('#naSave');
     const prevLabel = btn?.textContent || '';
@@ -2236,14 +2252,14 @@ function openAppointmentModal(existing) {
       renderAgenda();
       showToast(isNew ? 'Afspraak opgeslagen op server ✓' : 'Afspraak bijgewerkt ✓');
 
-      if (sendConfirm && c.email) {
+      if (sendConfirm && c?.email) {
         const subject = buildConfirmationSubject(c, working);
         const body = buildConfirmationBody(c, working);
         logSentMessage(c.id, 'bevestiging', subject);
         openMailto(c.email, subject, body);
       }
 
-      if (c.isNew && c.email) {
+      if (c?.isNew && c.email) {
         delete c.isNew;
         saveData(DB, { immediate: true });
         setTimeout(() => {
@@ -2276,6 +2292,13 @@ function openAppointmentModal(existing) {
         saveData(DB);
         working.clientId = newClient.id;
         render();
+      });
+    }
+    if ($('#naSkipClient')) {
+      $('#naSkipClient').addEventListener('click', () => {
+        working.clientId = '';
+        render();
+        showToast('Eigen afspraak — vul opmerkingen in');
       });
     }
     if ($('#naClearClient')) {
