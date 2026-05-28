@@ -1500,10 +1500,12 @@ body.kopie-placing .agenda-day-apps .app-block {
     max-height: min(92dvh, calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 16px));
     display: flex;
     flex-direction: column;
+    overflow-x: hidden;
   }
   .modal.large .modal-body {
     min-height: 0;
     flex: 1 1 auto;
+    overflow-x: hidden;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     padding: 0;
@@ -1514,14 +1516,45 @@ body.kopie-placing .agenda-day-apps .app-block {
 
   /* newappt-* basis staat onderaan (mobile-first); zie @media (min-width: 901px) voor desktop */
   .newappt-table-wrap {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    margin-left: -4px;
-    margin-right: -4px;
+    overflow-x: visible;
+    margin-left: 0;
+    margin-right: 0;
     padding-bottom: 4px;
   }
   .newappt-items-table {
-    min-width: 520px;
+    min-width: 0;
+    width: 100%;
+    table-layout: fixed;
+  }
+  .newappt-items-table th:nth-child(1),
+  .newappt-items-table th:nth-child(2),
+  .newappt-items-table td:nth-child(1),
+  .newappt-items-table td:nth-child(2) {
+    display: none;
+  }
+  .newappt-items-table th:nth-child(3),
+  .newappt-items-table td:nth-child(3) {
+    width: 42%;
+    word-break: break-word;
+  }
+  .newappt-items-table th:nth-child(4),
+  .newappt-items-table td:nth-child(4),
+  .newappt-items-table th:nth-child(5),
+  .newappt-items-table td:nth-child(5) {
+    width: 22%;
+    text-align: center;
+  }
+  .newappt-items-table th:nth-child(6),
+  .newappt-items-table td:nth-child(6) {
+    width: 14%;
+    text-align: center;
+  }
+  .newappt-items-table tfoot td:first-child {
+    text-align: right;
+    padding-right: 8px;
+  }
+  .newappt-grid {
+    overflow-x: hidden;
   }
 }
 
@@ -2194,7 +2227,34 @@ body.kopie-placing .agenda-day-apps .app-block {
   margin-top: 4px;
 }
 .newappt-items-table {
-  min-width: 480px;
+  width: 100%;
+}
+.na-num-input {
+  width: 100%;
+  max-width: 72px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 16px;
+  font-family: inherit;
+  box-sizing: border-box;
+  text-align: center;
+}
+.na-price-input {
+  max-width: 80px;
+}
+@media (min-width: 901px) {
+  .newappt-items-table {
+    min-width: 480px;
+  }
+  .na-num-input {
+    font-size: 13px;
+    padding: 3px 6px;
+    max-width: 56px;
+  }
+  .na-price-input {
+    max-width: 70px;
+  }
 }
 
 /* =========================================================

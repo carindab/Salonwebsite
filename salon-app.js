@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v78 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v78';
-const BUILD_LABEL = '20 mei 2026 · mobiel zoeklijst fix';
+console.log('%c[Salon Beheer] salon-app.js v79 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v79';
+const BUILD_LABEL = '20 mei 2026 · snel opslaan + mobiel formulier';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -465,6 +465,15 @@ async function persistDataToServer(opts = {}) {
   saveData(DB, { quiet: !!opts.quiet, skipServerFlush: true });
   if (!serverSync.enabled || !hasServerAccess()) return true;
   return flushServerSave(opts);
+}
+
+/** Lokaal direct bijwerken; server-sync op achtergrond (voelt instant aan). */
+function commitChangeThenBackgroundSync(failMsg) {
+  saveData(DB, { quiet: true, skipServerFlush: true });
+  if (!serverSync.enabled || !hasServerAccess()) return;
+  void flushServerSave({ quiet: true }).then(ok => {
+    if (!ok) showToast(failMsg || 'Opslaan op server mislukt — controleer internet');
+  });
 }
 
 /* ---------- Hostinger MySQL sync (PHP API) ---------- */
@@ -2330,8 +2339,8 @@ function openAppointmentModal(existing) {
                   <td>${escapeHtml(r.start)}</td>
                   <td>${escapeHtml(r.end)}</td>
                   <td>${escapeHtml(describeItem(r.it))}</td>
-                  <td><input type="number" min="0" value="${r.dur||0}" data-na-dur="${r.idx}" style="width:50px; padding:3px 6px; border:1px solid var(--border); border-radius:4px;" /></td>
-                  <td><input type="number" min="0" step="0.01" value="${(r.it.price||0).toFixed(2)}" data-na-price="${r.idx}" style="width:70px; padding:3px 6px; border:1px solid var(--border); border-radius:4px;" /></td>
+                  <td><input type="number" min="0" value="${r.dur||0}" data-na-dur="${r.idx}" class="na-num-input" /></td>
+                  <td><input type="number" min="0" step="0.01" value="${(r.it.price||0).toFixed(2)}" data-na-price="${r.idx}" class="na-num-input na-price-input" /></td>
                   <td><button type="button" class="row-btn delete" data-na-remove="${r.idx}">🗑</button></td>
                 </tr>`).join('') : `<tr><td colspan="6" class="empty">Nog geen behandelingen.</td></tr>`}
               </tbody>
@@ -2367,7 +2376,7 @@ function openAppointmentModal(existing) {
     bindEvents();
   }
 
-  async function saveAppointment() {
+  function saveAppointment() {
     const c = working.clientId ? findClient(working.clientId) : null;
     const notes = (working.notes || '').trim();
     if (!working.items.length && !notes) {
@@ -2375,55 +2384,36 @@ function openAppointmentModal(existing) {
     }
     if (!working.clientId) working.clientId = '';
 
-    const btn = $('#naSave');
-    const prevLabel = btn?.textContent || '';
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = 'Opslaan…';
+    if (isNew) {
+      working.id = uid('a');
+      DB.appointments.push(working);
+    } else {
+      const idx = DB.appointments.findIndex(x => x.id === existing.id);
+      if (idx >= 0) DB.appointments[idx] = working;
     }
 
-    try {
-      if (isNew) {
-        working.id = uid('a');
-        DB.appointments.push(working);
-      } else {
-        const idx = DB.appointments.findIndex(x => x.id === existing.id);
-        if (idx >= 0) DB.appointments[idx] = working;
-      }
+    agendaCurrentDate = working.date;
+    closeModal();
+    showView('agenda');
+    renderAgenda();
+    showToast(isNew ? 'Afspraak opgeslagen ✓' : 'Afspraak bijgewerkt ✓');
+    commitChangeThenBackgroundSync('Sync mislukt — controleer internet en sla opnieuw op');
 
-      const ok = await persistDataToServer({ quiet: false });
-      if (!ok) {
-        showToast('Opslaan op server mislukt — controleer internet en probeer opnieuw');
-        return;
-      }
+    if (sendConfirm && c?.email) {
+      const subject = buildConfirmationSubject(c, working);
+      const body = buildConfirmationBody(c, working);
+      logSentMessage(c.id, 'bevestiging', subject);
+      openMailto(c.email, subject, body);
+    }
 
-      agendaCurrentDate = working.date;
-      closeModal();
-      showView('agenda');
-      renderAgenda();
-      showToast(isNew ? 'Afspraak opgeslagen op server ✓' : 'Afspraak bijgewerkt ✓');
-
-      if (sendConfirm && c?.email) {
-        const subject = buildConfirmationSubject(c, working);
-        const body = buildConfirmationBody(c, working);
-        logSentMessage(c.id, 'bevestiging', subject);
-        openMailto(c.email, subject, body);
-      }
-
-      if (c?.isNew && c.email) {
-        delete c.isNew;
-        saveData(DB, { immediate: true });
-        setTimeout(() => {
-          if (confirm('Nieuwe klant. Ook het intake-formulier mailen?')) {
-            sendIntakeFormToClient(c);
-          }
-        }, 400);
-      }
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = prevLabel;
-      }
+    if (c?.isNew && c.email) {
+      delete c.isNew;
+      commitChangeThenBackgroundSync();
+      setTimeout(() => {
+        if (confirm('Nieuwe klant. Ook het intake-formulier mailen?')) {
+          sendIntakeFormToClient(c);
+        }
+      }, 400);
     }
   }
 
@@ -2521,7 +2511,7 @@ function openAppointmentModal(existing) {
     }
     $('#naSave')?.addEventListener('click', (e) => {
       e.preventDefault();
-      void saveAppointment();
+      saveAppointment();
     });
   }
 
@@ -4119,44 +4109,28 @@ function renderAppointmentDetail() {
   );
 
   // Opslaan
-  $('#saveApptDetail').addEventListener('click', async () => {
+  $('#saveApptDetail').addEventListener('click', () => {
     a.status = $('#apptStatus').value;
     a.notes  = $('#apptNotes').value;
-    const btn = $('#saveApptDetail');
-    const prevLabel = btn?.textContent || '';
-    if (btn) { btn.disabled = true; btn.textContent = 'Opslaan…'; }
-    try {
-      const ok = await persistDataToServer({ quiet: false });
-      if (!ok) return showToast('Opslaan op server mislukt — probeer opnieuw');
-      showToast('Afspraak opgeslagen ✓');
-      showView('agenda');
-      renderAgenda();
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
-    }
+    showToast('Afspraak opgeslagen ✓');
+    showView('agenda');
+    renderAgenda();
+    commitChangeThenBackgroundSync('Sync mislukt — controleer internet');
   });
 
   // Tijden tab opslaan
   if ($('#saveApptTijden')) {
-    $('#saveApptTijden').addEventListener('click', async () => {
+    $('#saveApptTijden').addEventListener('click', () => {
       const nd = $('#apptDate2').value;
       const nt = normalizeTime($('#apptTime2').value);
       if (!nd && !nt) return showToast('Vul datum en tijd in');
       if (nd) a.date = nd;
       if (nt) a.time = nt;
-      const btn = $('#saveApptTijden');
-      const prevLabel = btn?.textContent || '';
-      if (btn) { btn.disabled = true; btn.textContent = 'Opslaan…'; }
-      try {
-        const ok = await persistDataToServer({ quiet: false });
-        if (!ok) return showToast('Opslaan op server mislukt — probeer opnieuw');
-        agendaCurrentDate = a.date;
-        showToast('Tijden opgeslagen ✓');
-        showView('agenda');
-        renderAgenda();
-      } finally {
-        if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
-      }
+      agendaCurrentDate = a.date;
+      showToast('Tijden opgeslagen ✓');
+      showView('agenda');
+      renderAgenda();
+      commitChangeThenBackgroundSync('Sync mislukt — controleer internet');
     });
   }
 
@@ -7724,28 +7698,22 @@ function salonAppInit() {
     if (cell) {
       agendaCurrentDate = cell.dataset.date || agendaCurrentDate;
       if (pendingRescheduleApptId) {
-        void (async () => {
-          const appt = DB.appointments.find(x => x.id === pendingRescheduleApptId);
-          if (!appt) {
-            pendingRescheduleApptId = null;
-            renderAgenda();
-            return showToast('Afspraak niet meer gevonden');
-          }
-          const date = cell.dataset.date || agendaCurrentDate;
-          const time = normalizeTime(cell.dataset.slot || '10:00');
-          appt.date = date;
-          appt.time = time;
+        const appt = DB.appointments.find(x => x.id === pendingRescheduleApptId);
+        if (!appt) {
           pendingRescheduleApptId = null;
-          document.body.classList.remove('kopie-placing');
-          agendaCurrentDate = date;
           renderAgenda();
-          const ok = await persistDataToServer({ quiet: false });
-          if (!ok) {
-            showToast('Opslaan op server mislukt — probeer opnieuw');
-          } else {
-            showToast(`Afspraak verplaatst naar ${fmtDate(date)} ${time} ✓`);
-          }
-        })();
+          return showToast('Afspraak niet meer gevonden');
+        }
+        const date = cell.dataset.date || agendaCurrentDate;
+        const time = normalizeTime(cell.dataset.slot || '10:00');
+        appt.date = date;
+        appt.time = time;
+        pendingRescheduleApptId = null;
+        document.body.classList.remove('kopie-placing');
+        agendaCurrentDate = date;
+        renderAgenda();
+        showToast(`Afspraak verplaatst naar ${fmtDate(date)} ${time} ✓`);
+        commitChangeThenBackgroundSync('Sync mislukt — controleer internet');
         return;
       }
       if (pendingKopieDraft) {
@@ -7766,10 +7734,8 @@ function salonAppInit() {
         document.body.classList.remove('kopie-placing');
         agendaCurrentDate = date;
         renderAgenda();
-        void persistDataToServer({ quiet: false }).then(ok => {
-          if (!ok) showToast('Opslaan op server mislukt — probeer opnieuw');
-          else showToast(`Kopie geplaatst op ${fmtDate(date)} ${time} ✓`);
-        });
+        showToast(`Kopie geplaatst op ${fmtDate(date)} ${time} ✓`);
+        commitChangeThenBackgroundSync('Sync mislukt — controleer internet');
         return;
       }
       openAppointmentModal({ id:'', date: cell.dataset.date||agendaCurrentDate, time: cell.dataset.slot||'10:00', clientId:'', items:[], status:'gepland', paid:false, notes:'' });
