@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v79 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v79';
-const BUILD_LABEL = '20 mei 2026 · snel opslaan + mobiel formulier';
+console.log('%c[Salon Beheer] salon-app.js v80 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v80';
+const BUILD_LABEL = '20 mei 2026 · bevestigingsmail template';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -1551,6 +1551,37 @@ function describeItem(it) {
 function appointmentSummary(a) {
   return (a.items || []).map(it => `${it.qty} × ${describeItem(it)}`).join(', ');
 }
+/** Behandelingenregels voor bevestigingsmail {cart}. */
+function appointmentCartText(appointment) {
+  const items = appointment?.items || [];
+  if (!items.length) return (appointment?.notes || '').trim();
+  const lines = [];
+  let cursor = appointment.time || '00:00';
+  items.forEach(it => {
+    const name = describeItem(it);
+    const dur = treatmentItemDurationMins(it);
+    const qty = it.qty || 1;
+    const label = qty > 1 ? `${qty}× ${name}` : name;
+    if (dur) {
+      const [h, m] = cursor.split(':').map(Number);
+      const start = cursor;
+      const total = h * 60 + m + dur;
+      const end = `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+      lines.push(`${label}\t${start} – ${end}`);
+      cursor = end;
+    } else {
+      lines.push(label);
+    }
+  });
+  return lines.join('\n');
+}
+function maybeSendAppointmentConfirmation(client, appointment, send) {
+  if (!send || !client?.email) return;
+  const subject = buildConfirmationSubject(client, appointment);
+  const body = buildConfirmationBody(client, appointment);
+  logSentMessage(client.id, 'bevestiging', subject);
+  openMailto(client.email, subject, body);
+}
 /** Minuten per behandeling-regel (import-duur, catalogus, anders 30 min). */
 function treatmentItemDurationMins(it) {
   if (!it || it.kind !== 'treatment') return 0;
@@ -2400,10 +2431,7 @@ function openAppointmentModal(existing) {
     commitChangeThenBackgroundSync('Sync mislukt — controleer internet en sla opnieuw op');
 
     if (sendConfirm && c?.email) {
-      const subject = buildConfirmationSubject(c, working);
-      const body = buildConfirmationBody(c, working);
-      logSentMessage(c.id, 'bevestiging', subject);
-      openMailto(c.email, subject, body);
+      maybeSendAppointmentConfirmation(c, working, true);
     }
 
     if (c?.isNew && c.email) {
@@ -4030,7 +4058,7 @@ function renderAppointmentDetail() {
               </div>
 
               <label class="confirm-mail">
-                <input type="checkbox" id="apptSendConfirm" /> Automatische bevestigingsmail sturen
+                <input type="checkbox" id="apptSendConfirm" ${!c?.email ? 'disabled' : ''} /> Automatische bevestigingsmail sturen ${!c?.email ? '<span style="color:var(--muted); font-size:12px;">(geen e-mail bekend)</span>' : ''}
               </label>
             </div>
 
@@ -4112,10 +4140,12 @@ function renderAppointmentDetail() {
   $('#saveApptDetail').addEventListener('click', () => {
     a.status = $('#apptStatus').value;
     a.notes  = $('#apptNotes').value;
+    const sendConfirmMail = $('#apptSendConfirm')?.checked;
     showToast('Afspraak opgeslagen ✓');
     showView('agenda');
     renderAgenda();
     commitChangeThenBackgroundSync('Sync mislukt — controleer internet');
+    maybeSendAppointmentConfirmation(c, a, sendConfirmMail);
   });
 
   // Tijden tab opslaan
@@ -7112,22 +7142,66 @@ Mobiel: {salon_mobiel}
 {website_kort}`;
 }
 
+function confirmationMailBodyTemplate() {
+  return `Beste {klant_aanhef},
+
+Bedankt voor je reservering. Wij hebben het volgende reserveringsverzoek voor je vastgelegd:
+
+Datum:\t{datum}
+Van:\t{vantijd}
+Tot:\t{tottijd}
+{cart}
+
+Om je huidconditie en je wensen beter in kaart te brengen, vragen we je om onze online huidenquête (intake) in te vullen. Deze ontvang je in een aparte e-mail. Door de enquête in te vullen, kunnen we ons goed voorbereiden op jouw eerste afspraak. Alvast bedankt!
+
+Voorbereiding op je afspraak:
+Indien mogelijk, kom graag zonder foundation. Het is ook prettig als je 's ochtends vóór de huidscan niets meer aanbrengt en je huid niet met water reinigt. De avond ervoor kun je je huid reinigen en je gebruikelijke huidverzorgingsproducten aanbrengen zoals je gewend bent. Mocht het vanwege werk niet mogelijk zijn om 's ochtends niets meer aan te brengen, dan kun je gewoon je gebruikelijke huidverzorging gebruiken.
+
+Belangrijke informatie over de locatie:
+De ingang is via de tuin. Wij bevinden ons achter de winkelstraat. In de winkelstraat kun je eenvoudig parkeren met een parkeerschijf. Aan de achterzijde is ook voldoende parkeergelegenheid beschikbaar. Als je de Kerkstraat inrijdt, neem dan de eerste straat richting het Elim Instituut. Neem je de tweede straat na het appartementencomplex, dan kom je op een groot parkeerterrein waar geen parkeerschijf nodig is.
+
+Afmeldbeleid:
+Ben je verhinderd? Laat het ons uiterlijk 48 uur van tevoren weten. Bij een afmelding binnen 24 uur zijn wij helaas genoodzaakt 50% van de behandelkosten in rekening te brengen.
+
+Vriendelijke groeten,
+
+{salon_contact_naam}
+
+{salon}
+{salon_adres}
+{salon_postcode} {salon_plaats}
+Tel: {salon_telefoon}
+Mobiel: {salon_mobiel}
+{website_kort}`;
+}
+
 function migrateMessageTemplates(parsed) {
   const defs = defaultMessageTemplates();
   if (!parsed.messageTemplates || !Array.isArray(parsed.messageTemplates)) {
     parsed.messageTemplates = defs;
     return;
   }
-  const newBody = appointmentMailBodyTemplate();
-  const oldMarkers = ['Dit is een vriendelijke herinnering', 'Wij zien u graag!', 'Hierbij bevestigen wij uw afspraak'];
-  ['appt_reminder', 'appt_confirmation'].forEach(key => {
-    const tpl = parsed.messageTemplates.find(t => t.key === key);
-    const def = defs.find(t => t.key === key);
-    if (!tpl || !def) return;
+  const newReminderBody = appointmentMailBodyTemplate();
+  const newConfirmationBody = confirmationMailBodyTemplate();
+  const oldReminderMarkers = ['Dit is een vriendelijke herinnering', 'Wij zien u graag!', 'Hierbij bevestigen wij uw afspraak'];
+  const oldConfirmationMarkers = ['Hierbij bevestigen wij uw afspraak', 'Wij zien u graag op'];
+  const newConfirmationMarkers = ['Bedankt voor je reservering', 'Afmeldbeleid', 'Voorbereiding op je afspraak'];
+  parsed.messageTemplates.forEach(tpl => {
+    const def = defs.find(t => t.key === tpl.key);
+    if (!def) return;
     const body = tpl.body || '';
-    if (oldMarkers.some(m => body.includes(m)) || body.includes('Met vriendelijke groet,\n{salon}')) {
-      tpl.body = newBody;
-      if (key === 'appt_reminder') {
+    if (tpl.key === 'appt_reminder') {
+      if (oldReminderMarkers.some(m => body.includes(m)) || body.includes('Met vriendelijke groet,\n{salon}')) {
+        tpl.body = newReminderBody;
+        tpl.subject = def.subject;
+        tpl.name = def.name;
+      }
+    }
+    if (tpl.key === 'appt_confirmation') {
+      if (!newConfirmationMarkers.some(m => body.includes(m))
+        || oldConfirmationMarkers.some(m => body.includes(m))
+        || body === newReminderBody) {
+        tpl.body = newConfirmationBody;
         tpl.subject = def.subject;
         tpl.name = def.name;
       }
@@ -7141,7 +7215,8 @@ function migrateMessageTemplates(parsed) {
 }
 
 function defaultMessageTemplates() {
-  const mailBody = appointmentMailBodyTemplate();
+  const reminderBody = appointmentMailBodyTemplate();
+  const confirmationBody = confirmationMailBodyTemplate();
   const tk = '\n\nVriendelijke groet,\n\n{salon_contact_naam}\n{salon}';
   return [
     {
@@ -7155,9 +7230,9 @@ function defaultMessageTemplates() {
     {
       id: 'appt_confirmation',
       key: 'appt_confirmation',
-      name: 'Bevestiging van uw afspraak bij {salon}',
-      subject: 'Bevestiging van uw afspraak bij {salon}',
-      body: mailBody,
+      name: 'Bevestiging van je afspraak bij {salon}',
+      subject: 'Bevestiging van je afspraak bij {salon}',
+      body: confirmationBody,
       bcc: true
     },
     {
@@ -7165,7 +7240,7 @@ function defaultMessageTemplates() {
       key: 'appt_reminder',
       name: 'Herinnering aan uw afspraak bij {salon}',
       subject: 'Herinnering aan uw afspraak bij {salon}',
-      body: mailBody,
+      body: reminderBody,
       bcc: true
     },
     {
@@ -7299,6 +7374,7 @@ function fillTokens(text, ctx) {
     tijd_tot:        ctx?.tijd_tot != null && ctx.tijd_tot !== '' ? ctx.tijd_tot : (ctx?.appointment ? getAppointmentEndHM(ctx.appointment) : ''),
     tottijd:         ctx?.tottijd != null && ctx.tottijd !== '' ? ctx.tottijd : (ctx?.appointment ? getAppointmentEndHM(ctx.appointment) : ''),
     behandeling:     ctx?.appointment ? appointmentSummary(ctx.appointment) : (ctx?.behandeling || ''),
+    cart:            ctx?.cart != null ? ctx.cart : (ctx?.appointment ? appointmentCartText(ctx.appointment) : ''),
     totaal:          ctx?.totaal || '',
     betaalwijze:     ctx?.betaalwijze || '',
     factuurnummer:   ctx?.factuurnummer || '',
