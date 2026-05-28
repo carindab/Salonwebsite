@@ -79,14 +79,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $cronUrl = 'https://' . ($_SERVER['HTTP_HOST'] ?? 'agenda.eliminstituut.nl') . '/api/send-reminders.php?key=' . urlencode($cronKey);
+    $phpCron = '/usr/bin/php ' . dirname(__DIR__) . '/scripts/send-reminders-cli.php';
     mail_setup_html(
         'Gmail gekoppeld',
         '<p class="ok">E-mail is opgeslagen. Herinneringen worden ~24 uur van tevoren verstuurd.</p>'
         . '<p><strong>Laatste stap — cron in Hostinger:</strong></p>'
         . '<ol><li>hPanel → Geavanceerd → Cron Jobs</li>'
         . '<li>Elk uur: <code>0 * * * *</code></li>'
-        . '<li>Commando:<br><code style="word-break:break-all;font-size:12px">curl -s "' . htmlspecialchars($cronUrl) . '"</code></li></ol>'
-        . '<p class="note">Bewaar deze URL — niet delen (bevat geheime sleutel).</p>'
+        . '<li><strong>Aanbevolen commando:</strong><br><code style="word-break:break-all;font-size:12px">' . htmlspecialchars($phpCron) . ' &gt;&gt; ' . htmlspecialchars(dirname(__DIR__) . '/cron-logs/send-reminders.log 2>&1') . '</code></li>'
+        . '<li>Alternatief (curl):<br><code style="word-break:break-all;font-size:12px">curl -s "' . htmlspecialchars($cronUrl) . '"</code></li></ol>'
+        . '<p class="note">In de agenda: Instellingen → Herinneringen → <strong>Nu versturen</strong> voor morgen.</p>'
         . '<p><a href="/">← Terug naar agenda</a></p>'
     );
 }

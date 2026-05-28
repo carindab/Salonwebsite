@@ -178,12 +178,15 @@ Vanaf nu:
    https://agenda.eliminstituut.nl/api/setup-mail.php?key=tijdelijk-installatie-wachtwoord
    ```
 4. Vul Gmail + app-wachtwoord in → **Testmail sturen**
-5. In Hostinger **Cron Jobs** (elk uur):
+5. In Hostinger **Cron Jobs** (elk uur) — **aanbevolen**:
    ```
-   0 * * * * /bin/sh /home/u721044854/domains/agenda.eliminstituut.nl/public_html/scripts/send-reminders.sh
+   0 * * * * /usr/bin/php /home/u721044854/domains/agenda.eliminstituut.nl/public_html/scripts/send-reminders-cli.php >> /home/u721044854/domains/agenda.eliminstituut.nl/public_html/cron-logs/send-reminders.log 2>&1
    ```
-   Script staat in `public_html/scripts/send-reminders.sh` (zie Hostinger support of `scripts/send-reminders.sh` in repo).
-   Log: `public_html/cron-logs/send-reminders.log`
+   Alternatief: `/bin/sh .../scripts/send-reminders.sh` (leest cron-sleutel automatisch uit mail-config).
+
+   **Handmatig (voor morgen):** Agenda → Instellingen → Algemeen → **Nu versturen (morgen)**.
+
+   Log: `public_html/cron-logs/send-reminders.log` — en in de app onder Herinneringen status.
 
 Herinneringen gaan naar klanten met status **gepland** en een e-mailadres, ~24 uur voor de afspraak.
 

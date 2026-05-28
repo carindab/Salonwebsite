@@ -52,10 +52,11 @@ for (const d of DIRS) {
 }
 
 const scriptsDir = path.join(ROOT, "scripts");
-if (fs.existsSync(path.join(scriptsDir, "send-reminders.sh"))) {
-  const outScripts = path.join(OUT, "scripts");
-  fs.mkdirSync(outScripts, { recursive: true });
-  copyFile(path.join(scriptsDir, "send-reminders.sh"), path.join(outScripts, "send-reminders.sh"));
+const outScripts = path.join(OUT, "scripts");
+fs.mkdirSync(outScripts, { recursive: true });
+for (const script of ["send-reminders.sh", "send-reminders-cli.php"]) {
+  const src = path.join(scriptsDir, script);
+  if (fs.existsSync(src)) copyFile(src, path.join(outScripts, script));
 }
 
 copyFile(path.join(ROOT, "api", "config.example.php"), path.join(OUT, "api", "config.example.php"));

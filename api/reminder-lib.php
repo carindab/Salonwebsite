@@ -102,12 +102,24 @@ function salon_appointment_datetime(array $a): ?DateTimeImmutable
 
 function salon_client_reminder_hours(array $settings, ?array $client): int
 {
-    $hours = $client['reminderHours'] ?? 'standaard';
-    if ($hours === 'geen') {
-        return 0;
+    $hours = null;
+    if (is_array($client)) {
+        if (array_key_exists('reminderHours', $client) && $client['reminderHours'] !== '') {
+            $hours = $client['reminderHours'];
+        } elseif (isset($client['dossier']['reminderHours']) && $client['dossier']['reminderHours'] !== '') {
+            $hours = $client['dossier']['reminderHours'];
+        }
     }
-    if ($hours === 'standaard' || $hours === '') {
+    if ($hours === null || $hours === '' || $hours === 'standaard') {
         $hours = (string) ($settings['defaultReminderHours'] ?? 24);
+    }
+    if ($hours === 'geen') {
+        $remType = strtolower(trim((string) ($client['dossier']['reminderType'] ?? 'standaard')));
+        if ($remType !== 'geen') {
+            $hours = (string) ($settings['defaultReminderHours'] ?? 24);
+        } else {
+            return 0;
+        }
     }
     $n = (int) $hours;
     return $n > 0 ? $n : 24;
@@ -259,15 +271,175 @@ function salon_default_reminder_template(): array
     ];
 }
 
-/**
- * @return array{sent:int, skipped:int, errors:array<int,string>, candidates:int}
- */
-function salon_process_reminders(PDO $pdo, bool $dryRun = false): array
+function salon_cron_log_ensure(PDO $pdo): void
+{
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS salon_cron_log (
+          id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+          run_type VARCHAR(32) NOT NULL DEFAULT \'auto\',
+          sent INT NOT NULL DEFAULT 0,
+          skipped INT NOT NULL DEFAULT 0,
+          candidates INT NOT NULL DEFAULT 0,
+          errors_json TEXT,
+          ran_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+}
+
+function salon_cron_log_run(PDO $pdo, string $runType, array $result): void
+{
+    salon_cron_log_ensure($pdo);
+    $stmt = $pdo->prepare(
+        'INSERT INTO salon_cron_log (run_type, sent, skipped, candidates, errors_json)
+         VALUES (?, ?, ?, ?, ?)'
+    );
+    $stmt->execute([
+        $runType,
+        (int) ($result['sent'] ?? 0),
+        (int) ($result['skipped'] ?? 0),
+        (int) ($result['candidates'] ?? 0),
+        json_encode($result['errors'] ?? [], JSON_UNESCAPED_UNICODE),
+    ]);
+}
+
+function salon_cron_log_recent(PDO $pdo, int $limit = 5): array
+{
+    salon_cron_log_ensure($pdo);
+    $stmt = $pdo->prepare(
+        'SELECT run_type, sent, skipped, candidates, errors_json, ran_at
+         FROM salon_cron_log ORDER BY id DESC LIMIT ?'
+    );
+    $stmt->bindValue(1, max(1, $limit), PDO::PARAM_INT);
+    $stmt->execute();
+    $rows = [];
+    foreach ($stmt as $row) {
+        $rows[] = [
+            'runType' => (string) $row['run_type'],
+            'sent' => (int) $row['sent'],
+            'skipped' => (int) $row['skipped'],
+            'candidates' => (int) $row['candidates'],
+            'errors' => json_decode((string) ($row['errors_json'] ?? '[]'), true) ?: [],
+            'ranAt' => (string) $row['ran_at'],
+        ];
+    }
+    return $rows;
+}
+
+function salon_reminder_log_recent(PDO $pdo, int $limit = 10): array
+{
+    salon_reminder_log_ensure($pdo);
+    $stmt = $pdo->prepare(
+        'SELECT appointment_id, client_id, reminder_type, recipient, sent_at
+         FROM salon_reminder_log ORDER BY id DESC LIMIT ?'
+    );
+    $stmt->bindValue(1, max(1, $limit), PDO::PARAM_INT);
+    $stmt->execute();
+    $rows = [];
+    foreach ($stmt as $row) {
+        $rows[] = [
+            'appointmentId' => (string) $row['appointment_id'],
+            'clientId' => (string) ($row['client_id'] ?? ''),
+            'type' => (string) $row['reminder_type'],
+            'recipient' => (string) $row['recipient'],
+            'sentAt' => (string) $row['sent_at'],
+        ];
+    }
+    return $rows;
+}
+
+function salon_reminders_auto_enabled(PDO $pdo): bool
+{
+    $meta = salon_load_meta($pdo);
+    $settings = is_array($meta['settings'] ?? null) ? $meta['settings'] : [];
+    return ($settings['remindersAutoEnabled'] ?? true) !== false;
+}
+
+function salon_reminder_skip_reason(array $settings, ?array $client, array $a, DateTimeImmutable $now, bool $force): ?string
+{
+    $status = (string) ($a['status'] ?? '');
+    if ($status !== 'gepland') {
+        return 'status niet gepland';
+    }
+    if (!$client) {
+        return 'geen klant';
+    }
+    $email = trim((string) ($client['email'] ?? ''));
+    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        return 'geen geldig e-mailadres';
+    }
+    $hoursBefore = salon_client_reminder_hours($settings, $client);
+    if ($hoursBefore <= 0) {
+        return 'herinnering uit bij klant';
+    }
+    $apptDt = salon_appointment_datetime($a);
+    if (!$apptDt) {
+        return 'ongeldige datum/tijd';
+    }
+    $hoursUntil = ($apptDt->getTimestamp() - $now->getTimestamp()) / 3600;
+    if ($hoursUntil <= 0) {
+        return 'afspraak al geweest';
+    }
+    if (!$force) {
+        $window = max(2, min(4, (int) round($hoursBefore * 0.12)));
+        $minH = $hoursBefore - $window;
+        $maxH = $hoursBefore + $window;
+        if ($hoursUntil < $minH || $hoursUntil > $maxH) {
+            return sprintf('nog niet in venster (~%dh van tevoren, nu %.1fh)', $hoursBefore, $hoursUntil);
+        }
+    } elseif ($hoursUntil > 96) {
+        return 'meer dan 96 uur vooruit';
+    }
+    return null;
+}
+
+function salon_preview_reminders(PDO $pdo): array
 {
     salon_reminder_log_ensure($pdo);
     $meta = salon_load_meta($pdo);
     $settings = is_array($meta['settings'] ?? null) ? $meta['settings'] : [];
-    if (($settings['remindersAutoEnabled'] ?? true) === false) {
+    $tz = new DateTimeZone('Europe/Amsterdam');
+    $now = new DateTimeImmutable('now', $tz);
+    $from = $now->format('Y-m-d');
+    $to = $now->modify('+4 days')->format('Y-m-d');
+    $clients = salon_load_clients_index($pdo);
+    $appointments = salon_load_upcoming_appointments($pdo, $from, $to);
+    $items = [];
+    foreach ($appointments as $a) {
+        $clientId = (string) ($a['clientId'] ?? '');
+        $client = $clients[$clientId] ?? null;
+        $apptId = (string) ($a['id'] ?? '');
+        $hoursBefore = salon_client_reminder_hours($settings, $client);
+        $type = $hoursBefore . 'h';
+        $already = $apptId !== '' && salon_reminder_already_sent($pdo, $apptId, $type);
+        $reason = salon_reminder_skip_reason($settings, $client, $a, $now, false);
+        $forceReason = salon_reminder_skip_reason($settings, $client, $a, $now, true);
+        $name = salon_client_mail_greeting_name($client) ?: '(geen klant)';
+        $items[] = [
+            'appointmentId' => $apptId,
+            'date' => (string) ($a['date'] ?? ''),
+            'time' => (string) ($a['time'] ?? ''),
+            'clientName' => $name,
+            'email' => trim((string) ($client['email'] ?? '')),
+            'readyNow' => $reason === null && !$already,
+            'readyForce' => $forceReason === null && !$already,
+            'alreadySent' => $already,
+            'reason' => $already ? 'al verstuurd' : ($reason ?? 'klaar voor verzending'),
+        ];
+    }
+    return $items;
+}
+
+/**
+ * @param array{force?:bool} $options
+ * @return array{sent:int, skipped:int, errors:array<int,string>, candidates:int}
+ */
+function salon_process_reminders(PDO $pdo, bool $dryRun = false, array $options = []): array
+{
+    $force = !empty($options['force']);
+    salon_reminder_log_ensure($pdo);
+    $meta = salon_load_meta($pdo);
+    $settings = is_array($meta['settings'] ?? null) ? $meta['settings'] : [];
+    if (($settings['remindersAutoEnabled'] ?? true) === false && !$force) {
         return ['sent' => 0, 'skipped' => 0, 'errors' => ['Automatische herinneringen staan uit in instellingen.'], 'candidates' => 0];
     }
     if (!salon_mail_configured()) {
@@ -290,47 +462,20 @@ function salon_process_reminders(PDO $pdo, bool $dryRun = false): array
     $candidates = 0;
 
     foreach ($appointments as $a) {
-        $status = (string) ($a['status'] ?? '');
-        if ($status !== 'gepland') {
-            continue;
-        }
         $apptId = (string) ($a['id'] ?? '');
         if ($apptId === '') {
             continue;
         }
         $clientId = (string) ($a['clientId'] ?? '');
         $client = $clients[$clientId] ?? null;
-        if (!$client) {
-            $skipped++;
-            continue;
-        }
-        $email = trim((string) ($client['email'] ?? ''));
-        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+
+        $skipReason = salon_reminder_skip_reason($settings, $client, $a, $now, $force);
+        if ($skipReason !== null) {
             $skipped++;
             continue;
         }
 
         $hoursBefore = salon_client_reminder_hours($settings, $client);
-        if ($hoursBefore <= 0) {
-            $skipped++;
-            continue;
-        }
-
-        $apptDt = salon_appointment_datetime($a);
-        if (!$apptDt) {
-            $skipped++;
-            continue;
-        }
-
-        $diffSec = $apptDt->getTimestamp() - $now->getTimestamp();
-        $hoursUntil = $diffSec / 3600;
-        $window = max(2, min(4, (int) round($hoursBefore * 0.12)));
-        $minH = $hoursBefore - $window;
-        $maxH = $hoursBefore + $window;
-        if ($hoursUntil < $minH || $hoursUntil > $maxH) {
-            continue;
-        }
-
         $candidates++;
         $type = $hoursBefore . 'h';
         if (salon_reminder_already_sent($pdo, $apptId, $type)) {
@@ -338,6 +483,7 @@ function salon_process_reminders(PDO $pdo, bool $dryRun = false): array
             continue;
         }
 
+        $email = trim((string) ($client['email'] ?? ''));
         $subject = salon_fill_tokens((string) ($tpl['subject'] ?? ''), $settings, $client, $a, $treatments);
         $body = salon_fill_tokens((string) ($tpl['body'] ?? ''), $settings, $client, $a, $treatments);
         $bcc = !empty($settings['bccCopy']) && !empty($settings['email']) ? (string) $settings['email'] : null;

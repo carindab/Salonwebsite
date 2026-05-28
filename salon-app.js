@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v80 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v80';
-const BUILD_LABEL = '20 mei 2026 · bevestigingsmail template';
+console.log('%c[Salon Beheer] salon-app.js v81 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v81';
+const BUILD_LABEL = '20 mei 2026 · herinneringen cron fix';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -6073,6 +6073,15 @@ function renderAlgemeen() {
             <br>Gmail koppelen: <a href="/api/setup-mail.php?key=tijdelijk-installatie-wachtwoord" target="_blank" rel="noopener">setup-mail.php</a>
             <span id="mailStatusHint"></span>
           </p>
+          <div id="reminderStatusPanel" class="reminder-status-panel" style="margin:12px 0;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:#faf8f5;font-size:13px;line-height:1.5;">
+            <strong>Herinneringen status</strong>
+            <p id="reminderStatusText" style="margin:8px 0;color:var(--muted);">Laden…</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+              <button type="button" class="btn primary small" id="runRemindersForce">Nu versturen (morgen)</button>
+              <button type="button" class="btn ghost small" id="refreshReminderStatus">Vernieuwen</button>
+            </div>
+            <div id="reminderPreviewList" style="margin-top:10px;max-height:220px;overflow:auto;"></div>
+          </div>
           <div style="margin-top:18px;">
             <button type="submit" class="btn primary">Opslaan</button>
           </div>
@@ -6107,6 +6116,64 @@ function renderAlgemeen() {
       hint.style.color = data.configured ? 'var(--accent-dark)' : '#a73f34';
     })
     .catch(() => {});
+
+  async function loadReminderStatus() {
+    const textEl = $('#reminderStatusText');
+    const listEl = $('#reminderPreviewList');
+    if (!textEl || !getSalonApiBase() || !hasServerAccess()) {
+      if (textEl) textEl.textContent = 'Log in op de server om herinneringen te beheren.';
+      return;
+    }
+    textEl.textContent = 'Laden…';
+    try {
+      const res = await salonApiFetch(`${getSalonApiBase()}/reminder-status.php`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'onbekend');
+      const last = (data.lastCronRuns || [])[0];
+      const lastTxt = last
+        ? `Laatste cron: ${last.ranAt} — ${last.sent} verstuurd, ${last.skipped} overgeslagen`
+        : 'Nog geen cron-run geregistreerd — stel cron in Hostinger in (zie setup-mail.php).';
+      const mailTxt = data.mailConfigured ? 'Gmail ✓' : 'Gmail niet gekoppeld';
+      const autoTxt = data.remindersAutoEnabled ? 'Automatisch aan' : 'Automatisch uit';
+      textEl.textContent = `${mailTxt} · ${autoTxt}. ${lastTxt}`;
+      const preview = (data.preview || []).filter(p => p.date);
+      if (!listEl) return;
+      if (!preview.length) {
+        listEl.innerHTML = '<p style="margin:0;color:var(--muted);">Geen afspraken in de komende 4 dagen.</p>';
+        return;
+      }
+      listEl.innerHTML = `<table class="treatments-table" style="font-size:12px;margin:0;"><thead><tr><th>Datum</th><th>Klant</th><th>Status</th></tr></thead><tbody>${
+        preview.map(p => `<tr>
+          <td>${escapeHtml(fmtDate(p.date))} ${escapeHtml(p.time||'')}</td>
+          <td>${escapeHtml(p.clientName)}</td>
+          <td>${p.alreadySent ? '✓ al verstuurd' : (p.readyForce ? '<strong style="color:var(--accent-dark)">klaar</strong>' : escapeHtml(p.reason))}</td>
+        </tr>`).join('')
+      }</tbody></table>`;
+    } catch (e) {
+      textEl.textContent = 'Status laden mislukt: ' + (e.message || e);
+    }
+  }
+
+  $('#refreshReminderStatus')?.addEventListener('click', () => void loadReminderStatus());
+  $('#runRemindersForce')?.addEventListener('click', async () => {
+    if (!confirm('Herinneringen nu versturen voor alle afspraken van morgen/komende dagen die nog geen mail kregen?')) return;
+    const btn = $('#runRemindersForce');
+    const prev = btn?.textContent || '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Versturen…'; }
+    try {
+      const res = await salonApiFetch(`${getSalonApiBase()}/run-reminders.php?force=1`, { method: 'POST' });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'mislukt');
+      showToast(`${data.sent} herinnering(en) verstuurd ✓`);
+      if (data.errors?.length) showToast('Fouten: ' + data.errors.join('; '));
+      void loadReminderStatus();
+    } catch (e) {
+      showToast('Versturen mislukt: ' + (e.message || e));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = prev; }
+    }
+  });
+  void loadReminderStatus();
 }
 
 /* ---------- Data & backup ---------- */
@@ -6627,7 +6694,8 @@ function renderKlantdossier() {
               </div>
               <div class="dos-row"><label>Tijd van te voren</label>
                 <select name="reminderHours">
-                  <option value="geen" ${(d.reminderHours||'geen')==='geen'?'selected':''}>geen</option>
+                  <option value="standaard" ${(d.reminderHours||'standaard')==='standaard'?'selected':''}>Standaard (24 uur)</option>
+                  <option value="geen" ${d.reminderHours==='geen'?'selected':''}>geen</option>
                   <option value="24"   ${d.reminderHours==='24'?'selected':''}>24 uur</option>
                   <option value="48"   ${d.reminderHours==='48'?'selected':''}>48 uur</option>
                   <option value="72"   ${d.reminderHours==='72'?'selected':''}>72 uur</option>
@@ -6784,7 +6852,7 @@ function renderKlantdossier() {
       postal:           fd.get('postal')||'',
       newsletter:       fd.get('newsletter')||'ja',
       reminderType:     fd.get('reminderType')||'standaard',
-      reminderHours:    fd.get('reminderHours')||'geen',
+      reminderHours:    fd.get('reminderHours')||'standaard',
       invitedDate:      fd.get('invitedDate')||'',
       invitedTemplate:  fd.get('invitedTemplate')||'',
       invitedMessage:   fd.get('invitedMessage')||'',
