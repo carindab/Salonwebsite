@@ -1,4 +1,4 @@
-DirectoryIndex index.html index.php
+DirectoryIndex index.php index.html
 
 # PHP — langere timeout voor grote database-load (voorkomt 504)
 <IfModule mod_fcgid.c>
@@ -14,11 +14,18 @@ DirectoryIndex index.html index.php
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteRule ^api/config\.php$ - [F,L]
+  # Oude bookmark index.html → altijd verse versie via PHP
+  RewriteRule ^index\.html$ index.php [L,QSA]
 </IfModule>
 
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
-  # Altijd nieuwste app laden (voorkomt oude rapportage in cache)
+  # Altijd nieuwste app laden (voorkomt oude versie op mobiel)
+  <FilesMatch "^(index\.html|index\.php)$">
+    Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
   <FilesMatch "\.(html|js|css)$">
     Header set Cache-Control "no-cache, no-store, must-revalidate"
     Header set Pragma "no-cache"

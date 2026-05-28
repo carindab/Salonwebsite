@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v72 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v72';
-const BUILD_LABEL = '27 mei 2026 · factuur als PDF';
+console.log('%c[Salon Beheer] salon-app.js v73 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v73';
+const BUILD_LABEL = '27 mei 2026 · mobiel auto-update';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -544,12 +544,18 @@ async function checkServerRelease() {
   const base = getSalonApiBase();
   if (!base) return;
   try {
-    const res = await fetch(`${base}/version.php`, { cache: 'no-store' });
+    const res = await fetch(`${base}/version.php?_=${Date.now()}`, { cache: 'no-store' });
     const data = await res.json();
     if (!data.ok || !data.release) return;
-    if (data.release !== APP_VERSION) {
-      showToast(`Nieuwe versie op server (${data.release}). Ververs: Cmd+Shift+R (Mac) of Ctrl+F5.`);
+    if (data.release === APP_VERSION) return;
+    const reloadKey = 'salon_auto_reload_' + data.release;
+    if (!sessionStorage.getItem(reloadKey)) {
+      sessionStorage.setItem(reloadKey, '1');
+      showToast(`Nieuwe versie ${data.release} — wordt geladen…`);
+      setTimeout(() => location.reload(), 600);
+      return;
     }
+    showToast(`Nieuwe versie beschikbaar (${data.release}). Sluit tab en open opnieuw, of wis websitegegevens in Safari.`);
   } catch (_) { /* offline */ }
 }
 
