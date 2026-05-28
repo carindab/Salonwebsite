@@ -456,30 +456,7 @@
   <!-- Toast -->
   <div class="toast hidden" id="toast"></div>
 
-  <script>
-  (function () {
-    var ts = Date.now();
-    function loadScript(src, next) {
-      var s = document.createElement('script');
-      s.src = src + (src.indexOf('?') >= 0 ? '&' : '?') + '_=' + ts;
-      s.onload = function () { if (next) next(); };
-      s.onerror = function () { if (next) next(); };
-      document.body.appendChild(s);
-    }
-    fetch('api/version.php?_=' + ts, { cache: 'no-store', credentials: 'same-origin' })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        var v = (d && d.release) ? encodeURIComponent(d.release) : '{{RELEASE}}';
-        loadScript('lib/html2pdf.bundle.min.js?v=' + v, function () {
-          loadScript('salon-app.js?v=' + v);
-        });
-      })
-      .catch(function () {
-        loadScript('lib/html2pdf.bundle.min.js?v={{RELEASE}}', function () {
-          loadScript('salon-app.js?v={{RELEASE}}');
-        });
-      });
-  })();
-  </script>
+  <script src="lib/html2pdf.bundle.min.js?v={{RELEASE}}"></script>
+  <script src="salon-app.js?v={{RELEASE}}"></script>
 </body>
 </html>

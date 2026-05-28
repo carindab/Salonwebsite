@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v75 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v75';
-const BUILD_LABEL = '27 mei 2026 · eigen afspraak zonder klant';
+console.log('%c[Salon Beheer] salon-app.js v76 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v76';
+const BUILD_LABEL = '27 mei 2026 · agenda start fix';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -7366,7 +7366,12 @@ function autoFinalizeForgotten() {
 /* =========================================================
    EVENTS
    ========================================================= */
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', salonAppInit);
+if (document.readyState !== 'loading') salonAppInit();
+
+function salonAppInit() {
+  if (salonAppInit._done) return;
+  salonAppInit._done = true;
 
   console.log('%c✓ DOMContentLoaded — handlers worden aangekoppeld', 'color:#5fa463;');
 
@@ -7858,4 +7863,4 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(() => {
     try { autoFinalizeForgotten(); } catch(e) { console.error(e); }
   }, 60 * 1000);
-});
+}
