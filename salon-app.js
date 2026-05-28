@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v76 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v76';
-const BUILD_LABEL = '27 mei 2026 · agenda start fix';
+console.log('%c[Salon Beheer] salon-app.js v77 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v77';
+const BUILD_LABEL = '20 mei 2026 · verplaatsen opslaan fix';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -439,6 +439,7 @@ function safeSaveData(d, opts = {}) {
 function saveData(d, opts = {}) {
   invalidateAppointmentsIndex();
   safeSaveData(d, opts);
+  if (opts.skipServerFlush) return;
   if (opts.immediate && serverSync.enabled && hasServerAccess()) {
     clearTimeout(serverSync.saveTimer);
     void flushServerSave({ quiet: !!opts.quiet });
@@ -450,7 +451,20 @@ function saveData(d, opts = {}) {
 async function flushServerSave(opts = {}) {
   clearTimeout(serverSync.saveTimer);
   if (!serverSync.enabled || !hasServerAccess()) return false;
+  let waited = 0;
+  while (serverSync.saving && waited < 120000) {
+    await new Promise(r => setTimeout(r, 100));
+    waited += 100;
+  }
+  if (serverSync.saving) return false;
   return saveDatabaseToServer(opts);
+}
+
+/** Eén server-save na wijziging — voorkomt dubbele flush (race op mobiel). */
+async function persistDataToServer(opts = {}) {
+  saveData(DB, { quiet: !!opts.quiet, skipServerFlush: true });
+  if (!serverSync.enabled || !hasServerAccess()) return true;
+  return flushServerSave(opts);
 }
 
 /* ---------- Hostinger MySQL sync (PHP API) ---------- */
@@ -1296,6 +1310,13 @@ function toLocalISODate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 function todayLocalISO() { return toLocalISODate(new Date()); }
+/** Normaliseer tijd naar HH:MM (Safari geeft soms HH:MM:SS). */
+function normalizeTime(t) {
+  if (!t || typeof t !== 'string') return '';
+  const m = t.trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return t.trim();
+  return `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`;
+}
 function parseLocalYMD(iso) {
   if (!iso || typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return new Date();
   const [y, m, day] = iso.split('-').map(Number);
@@ -1762,6 +1783,7 @@ function renderHome() {
 let agendaCurrentDate = todayISO();
 /** Wacht op klik in agenda na “Kopie inplannen” (week gekozen, tijd nog niet). */
 let pendingKopieDraft = null;
+let pendingRescheduleApptId = null;
 const AGENDA_GRID_START_MIN = 8 * 60;
 const AGENDA_GRID_END_MIN = 22 * 60;
 /** Rij-hoogte in de week-agenda (5 min); op smal scherm lager zodat de hele week horizontaal past. */
@@ -1883,7 +1905,7 @@ function updateAgendaViewToggle() {
   });
 }
 function agendaSlotInnerHtml(dateISO, slot) {
-  const label = pendingKopieDraft ? `${slot} Plaats hier` : slot;
+  const label = (pendingKopieDraft || pendingRescheduleApptId) ? `${slot} Plaats hier` : slot;
   return `<span class="agenda-cell-time" data-label="${escapeHtml(label)}">${slot}</span>`;
 }
 function getAgendaSlotPx() {
@@ -2039,7 +2061,20 @@ function renderAgenda() {
     hint.className = 'agenda-empty-hint';
     tbody.parentElement?.insertBefore(hint, tbody);
   }
-  if (pendingKopieDraft) {
+  if (pendingRescheduleApptId) {
+    const a = DB.appointments.find(x => x.id === pendingRescheduleApptId);
+    const c = a ? findClient(a.clientId) : null;
+    const who = c ? clientFullName(c) : (a?.notes?.trim() || 'Eigen afspraak');
+    hint.innerHTML = `<p><strong>Verplaatsen</strong> — ${escapeHtml(who)}: klik op een <strong>nieuw tijdvak</strong>. <button type="button" class="btn ghost small" id="cancelReschedulePlacing">Annuleren</button></p>`;
+    hint.style.display = 'block';
+    hint.classList.add('agenda-kopie-hint');
+    document.getElementById('cancelReschedulePlacing')?.addEventListener('click', () => {
+      pendingRescheduleApptId = null;
+      document.body.classList.remove('kopie-placing');
+      renderAgenda();
+      showToast('Verplaatsen geannuleerd');
+    });
+  } else if (pendingKopieDraft) {
     const c = findClient(pendingKopieDraft.clientId);
     hint.innerHTML = `<p><strong>Kopie plaatsen</strong> voor ${escapeHtml(clientFullName(c))}: klik op een <strong>tijdvak</strong> (elke dag, ook grijs/vrij). <button type="button" class="btn ghost small" id="cancelKopiePlacing">Annuleren</button></p>`;
     hint.style.display = 'block';
@@ -2062,7 +2097,7 @@ function renderAgenda() {
     hint.classList.remove('agenda-kopie-hint');
     hint.style.display = 'none';
   }
-  document.body.classList.toggle('kopie-placing', !!pendingKopieDraft);
+  document.body.classList.toggle('kopie-placing', !!(pendingKopieDraft || pendingRescheduleApptId));
 }
 
 function openAppointmentModal(existing) {
@@ -2236,14 +2271,10 @@ function openAppointmentModal(existing) {
         if (idx >= 0) DB.appointments[idx] = working;
       }
 
-      saveData(DB, { immediate: true, quiet: false });
-
-      if (usesServerAsPrimaryStorage()) {
-        const ok = await flushServerSave({ quiet: false });
-        if (!ok) {
-          showToast('Opslaan op server mislukt — controleer internet en probeer opnieuw');
-          return;
-        }
+      const ok = await persistDataToServer({ quiet: false });
+      if (!ok) {
+        showToast('Opslaan op server mislukt — controleer internet en probeer opnieuw');
+        return;
       }
 
       agendaCurrentDate = working.date;
@@ -3761,8 +3792,15 @@ function openAppointmentDetail(id) {
 }
 function openAppointmentReschedule(id) {
   if (!id) return showToast('Geen afspraak geselecteerd');
-  currentApptTab = 'tijden';
-  openAppointmentDetail(id);
+  const a = DB.appointments.find(x => x.id === id);
+  if (!a) return showToast('Afspraak niet gevonden');
+  pendingKopieDraft = null;
+  pendingRescheduleApptId = id;
+  agendaCurrentDate = a.date || agendaCurrentDate;
+  closeModal();
+  showView('agenda');
+  renderAgenda();
+  showToast('Kies een nieuwe dag en tijd in de agenda');
 }
 function focusAppointmentTijdenTab() {
   requestAnimationFrame(() => {
@@ -3887,7 +3925,7 @@ function renderAppointmentDetail() {
             </div>
 
             <div class="appt-actions">
-              <button class="btn primary" id="saveApptDetail">Opslaan</button>
+              <button type="button" class="btn primary" id="saveApptDetail">Opslaan</button>
               <button class="btn danger" id="sideDelete2">Verwijderen</button>
             </div>
           </div>
@@ -3899,7 +3937,7 @@ function renderAppointmentDetail() {
               <div class="appt-field"><label>Datum:</label><div class="val"><input type="date" id="apptDate2" value="${a.date}" /></div></div>
               <div class="appt-field"><label>Starttijd:</label><div class="val"><input type="time" id="apptTime2" value="${a.time}" /></div></div>
               <p style="margin-top:16px; font-size:13px; color:var(--muted);">Herinneringen worden automatisch ~24 uur van tevoren per e-mail verstuurd (Gmail via server).</p>
-              <button class="btn primary" id="saveApptTijden" style="margin-top:12px;">Tijden opslaan</button>
+              <button type="button" class="btn primary" id="saveApptTijden" style="margin-top:12px;">Tijden opslaan</button>
             </div>
           </div>
         </div>
@@ -3964,31 +4002,41 @@ function renderAppointmentDetail() {
   $('#saveApptDetail').addEventListener('click', async () => {
     a.status = $('#apptStatus').value;
     a.notes  = $('#apptNotes').value;
-    saveData(DB, { immediate: true, quiet: false });
-    if (usesServerAsPrimaryStorage()) {
-      const ok = await flushServerSave({ quiet: false });
-      if (!ok) return showToast('Opslaan op server mislukt');
+    const btn = $('#saveApptDetail');
+    const prevLabel = btn?.textContent || '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Opslaan…'; }
+    try {
+      const ok = await persistDataToServer({ quiet: false });
+      if (!ok) return showToast('Opslaan op server mislukt — probeer opnieuw');
+      showToast('Afspraak opgeslagen ✓');
+      showView('agenda');
+      renderAgenda();
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
     }
-    showToast('Afspraak opgeslagen ✓');
-    showView('agenda');
-    renderAgenda();
   });
 
   // Tijden tab opslaan
   if ($('#saveApptTijden')) {
     $('#saveApptTijden').addEventListener('click', async () => {
       const nd = $('#apptDate2').value;
-      const nt = $('#apptTime2').value;
+      const nt = normalizeTime($('#apptTime2').value);
+      if (!nd && !nt) return showToast('Vul datum en tijd in');
       if (nd) a.date = nd;
       if (nt) a.time = nt;
-      saveData(DB, { immediate: true, quiet: false });
-      if (usesServerAsPrimaryStorage()) {
-        const ok = await flushServerSave({ quiet: false });
-        if (!ok) return showToast('Opslaan op server mislukt');
+      const btn = $('#saveApptTijden');
+      const prevLabel = btn?.textContent || '';
+      if (btn) { btn.disabled = true; btn.textContent = 'Opslaan…'; }
+      try {
+        const ok = await persistDataToServer({ quiet: false });
+        if (!ok) return showToast('Opslaan op server mislukt — probeer opnieuw');
+        agendaCurrentDate = a.date;
+        showToast('Tijden opgeslagen ✓');
+        showView('agenda');
+        renderAgenda();
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
       }
-      showToast('Tijden opgeslagen ✓');
-      showView('agenda');
-      renderAgenda();
     });
   }
 
@@ -7547,7 +7595,7 @@ function salonAppInit() {
     });
   });
 
-  // Klik op lege cel = nieuwe afspraak
+  // Klik op lege cel = nieuwe afspraak / kopie / verplaatsen
   $('#agendaTbody').addEventListener('click', e => {
     const completeBtn = e.target.closest('[data-complete]'); if (completeBtn) return completeAppointment(completeBtn.dataset.complete);
     const paidBtn = e.target.closest('[data-mark-paid]'); if (paidBtn) return markPaid(paidBtn.dataset.markPaid);
@@ -7555,9 +7603,34 @@ function salonAppInit() {
     const cell = e.target.closest('.agenda-slot');
     if (cell) {
       agendaCurrentDate = cell.dataset.date || agendaCurrentDate;
+      if (pendingRescheduleApptId) {
+        void (async () => {
+          const appt = DB.appointments.find(x => x.id === pendingRescheduleApptId);
+          if (!appt) {
+            pendingRescheduleApptId = null;
+            renderAgenda();
+            return showToast('Afspraak niet meer gevonden');
+          }
+          const date = cell.dataset.date || agendaCurrentDate;
+          const time = normalizeTime(cell.dataset.slot || '10:00');
+          appt.date = date;
+          appt.time = time;
+          pendingRescheduleApptId = null;
+          document.body.classList.remove('kopie-placing');
+          agendaCurrentDate = date;
+          renderAgenda();
+          const ok = await persistDataToServer({ quiet: false });
+          if (!ok) {
+            showToast('Opslaan op server mislukt — probeer opnieuw');
+          } else {
+            showToast(`Afspraak verplaatst naar ${fmtDate(date)} ${time} ✓`);
+          }
+        })();
+        return;
+      }
       if (pendingKopieDraft) {
         const date = cell.dataset.date || agendaCurrentDate;
-        const time = cell.dataset.slot || '10:00';
+        const time = normalizeTime(cell.dataset.slot || '10:00');
         const newApp = {
           id: uid('a'),
           date,
@@ -7569,12 +7642,14 @@ function salonAppInit() {
           notes: pendingKopieDraft.notes || '',
         };
         DB.appointments.push(newApp);
-        saveData(DB);
         pendingKopieDraft = null;
         document.body.classList.remove('kopie-placing');
         agendaCurrentDate = date;
         renderAgenda();
-        showToast(`Kopie geplaatst op ${fmtDate(date)} ${time}`);
+        void persistDataToServer({ quiet: false }).then(ok => {
+          if (!ok) showToast('Opslaan op server mislukt — probeer opnieuw');
+          else showToast(`Kopie geplaatst op ${fmtDate(date)} ${time} ✓`);
+        });
         return;
       }
       openAppointmentModal({ id:'', date: cell.dataset.date||agendaCurrentDate, time: cell.dataset.slot||'10:00', clientId:'', items:[], status:'gepland', paid:false, notes:'' });
