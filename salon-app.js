@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v73 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v73';
-const BUILD_LABEL = '27 mei 2026 · mobiel auto-update';
+console.log('%c[Salon Beheer] salon-app.js v74 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v74';
+const BUILD_LABEL = '27 mei 2026 · mobiel opslaan fix';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -441,7 +441,7 @@ function saveData(d, opts = {}) {
   safeSaveData(d, opts);
   if (opts.immediate && serverSync.enabled && hasServerAccess()) {
     clearTimeout(serverSync.saveTimer);
-    void flushServerSave({ quiet: opts.quiet !== false });
+    void flushServerSave({ quiet: !!opts.quiet });
   } else {
     scheduleServerDatabaseSave();
   }
@@ -536,7 +536,6 @@ function updateVersionLabels() {
   const appLbl = $('#appVersionLabel');
   if (loginLbl) loginLbl.textContent = label;
   if (appLbl) appLbl.textContent = label;
-  initMobileSiteBar();
   void checkServerRelease();
 }
 
@@ -557,17 +556,6 @@ async function checkServerRelease() {
     }
     showToast(`Nieuwe versie beschikbaar (${data.release}). Sluit tab en open opnieuw, of wis websitegegevens in Safari.`);
   } catch (_) { /* offline */ }
-}
-
-function initMobileSiteBar() {
-  const bar = $('#mobileSiteBar');
-  if (!bar) return;
-  const urlEl = bar.querySelector('.mobile-site-url');
-  if (urlEl) {
-    const host = location.hostname || 'agenda.eliminstituut.nl';
-    urlEl.textContent = host;
-    urlEl.href = `${location.protocol}//${host}${location.pathname}`;
-  }
 }
 
 function refreshActiveView() {
@@ -1183,11 +1171,14 @@ function attachAutocomplete(input, getResults, onSelect, opts = {}) {
     `).join('');
     dropdown.style.display = 'block';
     dropdown.querySelectorAll('.ac-item').forEach(el => {
-      el.addEventListener('mousedown', e => {
+      const pick = (e) => {
         e.preventDefault();
-        const idx = Number(el.dataset.i);
-        choose(idx);
-      });
+        e.stopPropagation();
+        choose(Number(el.dataset.i));
+      };
+      el.addEventListener('mousedown', pick);
+      el.addEventListener('pointerdown', pick);
+      el.addEventListener('touchend', pick, { passive: false });
     });
   }
   function choose(idx) {
@@ -2194,11 +2185,79 @@ function openAppointmentModal(existing) {
       <div class="newappt-actions">
         ${existing && existing.id ? `<button type="button" class="btn danger" id="naDelete">Verwijderen</button>` : ''}
         <button type="button" class="btn ghost"   id="naCancel">Annuleren</button>
-        <button type="button" class="btn primary" id="naSave" ${working.items.length===0||!c?'disabled':''}>Opslaan en naar Agenda</button>
+        <button type="button" class="btn primary" id="naSave">Opslaan en naar Agenda</button>
       </div>
     `;
 
+    const saveBtn = $('#naSave');
+    if (saveBtn) {
+      const canSave = !!(c && working.items.length);
+      saveBtn.classList.toggle('btn-incomplete', !canSave);
+      saveBtn.setAttribute('aria-disabled', canSave ? 'false' : 'true');
+    }
+
     bindEvents();
+  }
+
+  async function saveAppointment() {
+    const c = findClient(working.clientId);
+    if (!c) return showToast('Selecteer eerst een klant (tik op naam in de lijst)');
+    if (!working.items.length) return showToast('Voeg minimaal één behandeling toe');
+
+    const btn = $('#naSave');
+    const prevLabel = btn?.textContent || '';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Opslaan…';
+    }
+
+    try {
+      if (isNew) {
+        working.id = uid('a');
+        DB.appointments.push(working);
+      } else {
+        const idx = DB.appointments.findIndex(x => x.id === existing.id);
+        if (idx >= 0) DB.appointments[idx] = working;
+      }
+
+      saveData(DB, { immediate: true, quiet: false });
+
+      if (usesServerAsPrimaryStorage()) {
+        const ok = await flushServerSave({ quiet: false });
+        if (!ok) {
+          showToast('Opslaan op server mislukt — controleer internet en probeer opnieuw');
+          return;
+        }
+      }
+
+      agendaCurrentDate = working.date;
+      closeModal();
+      showView('agenda');
+      renderAgenda();
+      showToast(isNew ? 'Afspraak opgeslagen op server ✓' : 'Afspraak bijgewerkt ✓');
+
+      if (sendConfirm && c.email) {
+        const subject = buildConfirmationSubject(c, working);
+        const body = buildConfirmationBody(c, working);
+        logSentMessage(c.id, 'bevestiging', subject);
+        openMailto(c.email, subject, body);
+      }
+
+      if (c.isNew && c.email) {
+        delete c.isNew;
+        saveData(DB, { immediate: true });
+        setTimeout(() => {
+          if (confirm('Nieuwe klant. Ook het intake-formulier mailen?')) {
+            sendIntakeFormToClient(c);
+          }
+        }, 400);
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = prevLabel;
+      }
+    }
   }
 
   function bindEvents() {
@@ -2207,7 +2266,7 @@ function openAppointmentModal(existing) {
       attachAutocomplete($('#naKlantSearch'),
         q => searchClients(q),
         item => { working.clientId = item.id; render(); },
-        { showAllOnFocus: false }
+        { showAllOnFocus: true }
       );
     }
     if ($('#naNewClient')) {
@@ -2286,45 +2345,10 @@ function openAppointmentModal(existing) {
         saveData(DB, { immediate: true }); closeModal(); renderAgenda(); showToast('Afspraak verwijderd');
       });
     }
-    $('#naSave').addEventListener('click', () => saveAppointment());
-  }
-
-  function saveAppointment() {
-    const c = findClient(working.clientId);
-    if (!c) return showToast('Selecteer eerst een klant');
-    if (!working.items.length) return showToast('Voeg minimaal één behandeling toe');
-
-    if (isNew) {
-      working.id = uid('a');
-      DB.appointments.push(working);
-    } else {
-      const idx = DB.appointments.findIndex(x => x.id === existing.id);
-      if (idx>=0) DB.appointments[idx] = working;
-    }
-    saveData(DB, { immediate: true, quiet: false });
-    agendaCurrentDate = working.date;
-    closeModal();
-    renderAgenda();
-    showToast(isNew ? 'Afspraak opgeslagen op server ✓' : 'Afspraak bijgewerkt ✓');
-
-    // Bevestigingsmail
-    if (sendConfirm && c.email) {
-      const subject = buildConfirmationSubject(c, working);
-      const body    = buildConfirmationBody(c, working);
-      logSentMessage(c.id, 'bevestiging', subject);
-      openMailto(c.email, subject, body);
-    }
-
-    // Nieuwe klant → ook intake formulier voorstellen
-    if (c.isNew && c.email) {
-      delete c.isNew;
-      saveData(DB);
-      setTimeout(() => {
-        if (confirm('Nieuwe klant. Ook het intake-formulier mailen?')) {
-          sendIntakeFormToClient(c);
-        }
-      }, 400);
-    }
+    $('#naSave')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      void saveAppointment();
+    });
   }
 
   openModal('Nieuwe afspraak', '');
@@ -3914,24 +3938,34 @@ function renderAppointmentDetail() {
   );
 
   // Opslaan
-  $('#saveApptDetail').addEventListener('click', () => {
+  $('#saveApptDetail').addEventListener('click', async () => {
     a.status = $('#apptStatus').value;
     a.notes  = $('#apptNotes').value;
-    saveData(DB);
-    showToast('Afspraak opgeslagen');
+    saveData(DB, { immediate: true, quiet: false });
+    if (usesServerAsPrimaryStorage()) {
+      const ok = await flushServerSave({ quiet: false });
+      if (!ok) return showToast('Opslaan op server mislukt');
+    }
+    showToast('Afspraak opgeslagen ✓');
     showView('agenda');
+    renderAgenda();
   });
 
   // Tijden tab opslaan
   if ($('#saveApptTijden')) {
-    $('#saveApptTijden').addEventListener('click', () => {
+    $('#saveApptTijden').addEventListener('click', async () => {
       const nd = $('#apptDate2').value;
       const nt = $('#apptTime2').value;
       if (nd) a.date = nd;
       if (nt) a.time = nt;
-      saveData(DB);
-      showToast('Tijden opgeslagen');
+      saveData(DB, { immediate: true, quiet: false });
+      if (usesServerAsPrimaryStorage()) {
+        const ok = await flushServerSave({ quiet: false });
+        if (!ok) return showToast('Opslaan op server mislukt');
+      }
+      showToast('Tijden opgeslagen ✓');
       showView('agenda');
+      renderAgenda();
     });
   }
 

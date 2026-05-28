@@ -825,37 +825,21 @@ body.client-drawer-open {
 }
 .toast.hidden { display: none; }
 
-.mobile-site-bar {
-  display: none;
-}
-
 @media (max-width: 900px) {
-  .mobile-site-bar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: fixed;
-    left: 0;
-    right: 0;
+  .btn {
+    touch-action: manipulation;
+    min-height: 44px;
+  }
+  .newappt-actions {
+    position: sticky;
     bottom: 0;
-    z-index: 180;
-    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
-    background: rgba(255, 255, 255, 0.96);
-    border-top: 1px solid var(--border);
-    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.06);
+    background: #fff;
+    z-index: 2;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.06);
   }
-  .mobile-site-url {
-    color: var(--accent-dark);
-    font-size: 12px;
-    font-weight: 600;
-    text-decoration: none;
-    letter-spacing: 0.02em;
-  }
-  .main {
-    padding-bottom: calc(40px + env(safe-area-inset-bottom));
-  }
-  .toast {
-    bottom: calc(48px + env(safe-area-inset-bottom));
+  .btn-incomplete {
+    opacity: 0.55;
   }
 }
 
