@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v81 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v81';
-const BUILD_LABEL = '20 mei 2026 · herinneringen cron fix';
+console.log('%c[Salon Beheer] salon-app.js v82 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v82';
+const BUILD_LABEL = '20 mei 2026 · bevestiging auto Gmail';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -1575,12 +1575,50 @@ function appointmentCartText(appointment) {
   });
   return lines.join('\n');
 }
-function maybeSendAppointmentConfirmation(client, appointment, send) {
+async function sendMailViaServer(to, subject, body, opts = {}) {
+  const base = getSalonApiBase();
+  if (!base || !hasServerAccess()) {
+    return { ok: false, error: 'Log in op de server om e-mail automatisch te versturen' };
+  }
+  try {
+    const stRes = await salonApiFetch(`${base}/mail-status.php`, { cache: 'no-store' });
+    const st = await stRes.json();
+    if (!st.ok || !st.configured) {
+      return { ok: false, error: 'Gmail nog niet gekoppeld — open setup-mail.php' };
+    }
+    const sendRes = await salonApiFetch(`${base}/send-mail.php`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to,
+        subject,
+        body,
+        bcc: opts.bcc || '',
+      }),
+    });
+    const data = await sendRes.json().catch(() => ({}));
+    if (!sendRes.ok || !data.ok) {
+      return { ok: false, error: data.error || `HTTP ${sendRes.status}` };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+async function maybeSendAppointmentConfirmation(client, appointment, send) {
   if (!send || !client?.email) return;
   const subject = buildConfirmationSubject(client, appointment);
   const body = buildConfirmationBody(client, appointment);
-  logSentMessage(client.id, 'bevestiging', subject);
-  openMailto(client.email, subject, body);
+  const bcc = DB.settings?.bccCopy && DB.settings?.email ? DB.settings.email : '';
+  const result = await sendMailViaServer(client.email, subject, body, { bcc });
+  if (result.ok) {
+    logSentMessage(client.id, 'bevestiging', subject);
+    commitChangeThenBackgroundSync();
+    showToast(`Bevestiging verstuurd naar ${client.email} ✓`);
+  } else {
+    showToast('Bevestiging niet verstuurd: ' + (result.error || 'onbekend'));
+  }
 }
 /** Minuten per behandeling-regel (import-duur, catalogus, anders 30 min). */
 function treatmentItemDurationMins(it) {
@@ -2386,7 +2424,7 @@ function openAppointmentModal(existing) {
       <hr class="newappt-hr" />
       <label class="confirm-mail" style="padding:0 18px;">
         <input type="checkbox" id="naSendConfirm" ${sendConfirm?'checked':''} ${!c?.email?'disabled':''} />
-        Automatische bevestigingsmail sturen ${!c?.email ? '<span style="color:var(--muted); font-size:12px;">(geen e-mail bekend)</span>':''}
+        Automatische bevestigingsmail via Gmail ${!c?.email ? '<span style="color:var(--muted); font-size:12px;">(geen e-mail bekend)</span>':''}
       </label>
 
       <div class="newappt-actions">
@@ -2431,7 +2469,7 @@ function openAppointmentModal(existing) {
     commitChangeThenBackgroundSync('Sync mislukt — controleer internet en sla opnieuw op');
 
     if (sendConfirm && c?.email) {
-      maybeSendAppointmentConfirmation(c, working, true);
+      void maybeSendAppointmentConfirmation(c, working, true);
     }
 
     if (c?.isNew && c.email) {
@@ -4058,7 +4096,7 @@ function renderAppointmentDetail() {
               </div>
 
               <label class="confirm-mail">
-                <input type="checkbox" id="apptSendConfirm" ${!c?.email ? 'disabled' : ''} /> Automatische bevestigingsmail sturen ${!c?.email ? '<span style="color:var(--muted); font-size:12px;">(geen e-mail bekend)</span>' : ''}
+                <input type="checkbox" id="apptSendConfirm" ${!c?.email ? 'disabled' : ''} /> Automatische bevestigingsmail via Gmail ${!c?.email ? '<span style="color:var(--muted); font-size:12px;">(geen e-mail bekend)</span>' : ''}
               </label>
             </div>
 
@@ -4145,7 +4183,7 @@ function renderAppointmentDetail() {
     showView('agenda');
     renderAgenda();
     commitChangeThenBackgroundSync('Sync mislukt — controleer internet');
-    maybeSendAppointmentConfirmation(c, a, sendConfirmMail);
+    void maybeSendAppointmentConfirmation(c, a, sendConfirmMail);
   });
 
   // Tijden tab opslaan
