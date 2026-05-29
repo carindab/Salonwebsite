@@ -254,9 +254,16 @@ function salon_get_reminder_template(array $meta): ?array
         return salon_default_reminder_template();
     }
     $body = (string) ($tpl['body'] ?? '');
-    $oldMarkers = ['Dit is een vriendelijke herinnering', 'Wij zien u graag!', 'Met vriendelijke groet,\n{salon}'];
+    $subject = (string) ($tpl['subject'] ?? '');
+    $oldMarkers = [
+        'Dit is een vriendelijke herinnering',
+        'Wij zien u graag!',
+        'willen wij u attenderen',
+        'Met vriendelijke groet,\n{salon}',
+        'Herinnering aan uw afspraak',
+    ];
     foreach ($oldMarkers as $marker) {
-        if (str_contains($body, $marker)) {
+        if (str_contains($body, $marker) || str_contains($subject, $marker)) {
             return salon_default_reminder_template();
         }
     }
@@ -266,8 +273,8 @@ function salon_get_reminder_template(array $meta): ?array
 function salon_default_reminder_template(): array
 {
     return [
-        'subject' => 'Herinnering aan uw afspraak bij {salon}',
-        'body' => "Beste {klant_aanhef},\n\nVia deze e-mail willen wij u attenderen op de volgende afspraak:\n\nDatum:\t{datum}\nVan:\t{vantijd}\nTot:\t{tottijd}\n\n\nVriendelijke groet,\n\n{salon_contact_naam}\n{salon}\n{salon_adres}\n{salon_postcode} {salon_plaats}\nTel: {salon_telefoon}\nMobiel: {salon_mobiel}\n{website_kort}",
+        'subject' => 'Herinnering aan je afspraak bij {salon}',
+        'body' => "Beste {klant_aanhef},\n\nVia deze e-mail willen wij je attenderen op je afspraak:\n\nDatum:\t{datum}\nVan:\t{vantijd}\nTot:\t{tottijd}\n\n\nVriendelijke groeten,\n\n{salon_contact_naam}\n{salon}\n{salon_adres}\n{salon_postcode} {salon_plaats}\nTel: {salon_telefoon}\nMobiel: {salon_mobiel}\n{website_kort}",
     ];
 }
 

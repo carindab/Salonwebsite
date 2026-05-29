@@ -3,9 +3,9 @@
    Alle data wordt in localStorage opgeslagen.
    ========================================================= */
 
-console.log('%c[Salon Beheer] salon-app.js v82 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
-const APP_VERSION = 'v82';
-const BUILD_LABEL = '20 mei 2026 · bevestiging auto Gmail';
+console.log('%c[Salon Beheer] salon-app.js v83 geladen', 'background:#5fa463; color:white; padding:4px 8px; font-weight:bold;');
+const APP_VERSION = 'v83';
+const BUILD_LABEL = '29 mei 2026 · berichten verwijderen + je herinnering';
 /** Seed-bestand op GitHub Pages — automatisch geladen (geen handmatige CSV-import nodig). */
 const SALON_SEED_VERSION = '6';
 const SALON_SEED_KEY = 'salon-seed-version';
@@ -6362,8 +6362,28 @@ function renderDataPanel() {
 }
 
 /* ---------- Berichten / E-mail templates ---------- */
+const PROTECTED_TEMPLATE_KEYS = new Set(['appt_reminder', 'appt_confirmation']);
+
+function getVisibleMessageTemplates() {
+  const removed = new Set(DB.settings?.removedTemplateKeys || []);
+  return (DB.messageTemplates || defaultMessageTemplates()).filter(t => !removed.has(t.key));
+}
+
+function removeMessageTemplate(key) {
+  if (PROTECTED_TEMPLATE_KEYS.has(key)) {
+    return showToast('Bevestiging en herinnering kunnen niet verwijderd worden');
+  }
+  if (!confirm('Dit e-mailbericht verwijderen uit de lijst? (Het systeem gebruikt dan nog wel een standaardtekst als dat nodig is.)')) return;
+  if (!DB.settings.removedTemplateKeys) DB.settings.removedTemplateKeys = [];
+  if (!DB.settings.removedTemplateKeys.includes(key)) DB.settings.removedTemplateKeys.push(key);
+  saveData(DB, { immediate: true });
+  showToast('Bericht verwijderd');
+  renderBerichtenList();
+}
+
 function renderBerichtenList() {
-  const tpls = DB.messageTemplates = DB.messageTemplates || defaultMessageTemplates();
+  DB.messageTemplates = DB.messageTemplates || defaultMessageTemplates();
+  const tpls = getVisibleMessageTemplates();
   const el = $('#spanel-berichten');
   el.innerHTML = `
     <div class="card">
@@ -6378,13 +6398,16 @@ function renderBerichtenList() {
           </div>
         </div>
         <table class="data-table">
-          <thead><tr><th>Bericht</th><th style="width:120px;">BCC ontvangen</th><th style="width:80px;">Bewerk</th></tr></thead>
+          <thead><tr><th>Bericht</th><th style="width:120px;">BCC ontvangen</th><th style="width:100px;">Acties</th></tr></thead>
           <tbody>
-            ${tpls.map(t => `<tr>
+            ${tpls.length ? tpls.map(t => `<tr>
               <td>${escapeHtml(fillTokens(t.name, {}))}</td>
               <td><input type="checkbox" data-tplbcc="${t.key}" ${t.bcc?'checked':''}></td>
-              <td><button class="row-btn" data-tpledit="${t.key}" title="Bewerken">✎</button></td>
-            </tr>`).join('')}
+              <td style="white-space:nowrap;">
+                <button type="button" class="row-btn" data-tpledit="${t.key}" title="Bewerken">✎</button>
+                ${PROTECTED_TEMPLATE_KEYS.has(t.key) ? '' : `<button type="button" class="row-btn delete" data-tpldel="${t.key}" title="Verwijderen">🗑</button>`}
+              </td>
+            </tr>`).join('') : `<tr><td colspan="3" class="empty">Geen berichten — herlaad de pagina om standaard berichten terug te zetten.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -6395,10 +6418,11 @@ function renderBerichtenList() {
     saveData(DB);
   }));
   el.querySelectorAll('[data-tplbcc]').forEach(c => c.addEventListener('change', () => {
-    const tpl = tpls.find(t => t.key === c.dataset.tplbcc);
+    const tpl = DB.messageTemplates.find(t => t.key === c.dataset.tplbcc);
     if (tpl) { tpl.bcc = c.checked; saveData(DB); }
   }));
   el.querySelectorAll('[data-tpledit]').forEach(b => b.addEventListener('click', () => openTemplateEditor(b.dataset.tpledit)));
+  el.querySelectorAll('[data-tpldel]').forEach(b => b.addEventListener('click', () => removeMessageTemplate(b.dataset.tpldel)));
 }
 
 function openTemplateEditor(key) {
@@ -7228,16 +7252,20 @@ function clientMailGreetingName(c) {
 }
 
 function appointmentMailBodyTemplate() {
+  return reminderMailBodyTemplate();
+}
+
+function reminderMailBodyTemplate() {
   return `Beste {klant_aanhef},
 
-Via deze e-mail willen wij u attenderen op de volgende afspraak:
+Via deze e-mail willen wij je attenderen op je afspraak:
 
 Datum:\t{datum}
 Van:\t{vantijd}
 Tot:\t{tottijd}
 
 
-Vriendelijke groet,
+Vriendelijke groeten,
 
 {salon_contact_naam}
 {salon}
@@ -7287,17 +7315,19 @@ function migrateMessageTemplates(parsed) {
     parsed.messageTemplates = defs;
     return;
   }
-  const newReminderBody = appointmentMailBodyTemplate();
+  const newReminderBody = reminderMailBodyTemplate();
   const newConfirmationBody = confirmationMailBodyTemplate();
-  const oldReminderMarkers = ['Dit is een vriendelijke herinnering', 'Wij zien u graag!', 'Hierbij bevestigen wij uw afspraak'];
+  const oldReminderMarkers = ['Dit is een vriendelijke herinnering', 'Wij zien u graag!', 'Hierbij bevestigen wij uw afspraak', 'willen wij u attenderen', 'Herinnering aan uw afspraak'];
   const oldConfirmationMarkers = ['Hierbij bevestigen wij uw afspraak', 'Wij zien u graag op'];
   const newConfirmationMarkers = ['Bedankt voor je reservering', 'Afmeldbeleid', 'Voorbereiding op je afspraak'];
+  const removed = new Set(parsed.settings?.removedTemplateKeys || []);
   parsed.messageTemplates.forEach(tpl => {
     const def = defs.find(t => t.key === tpl.key);
     if (!def) return;
     const body = tpl.body || '';
     if (tpl.key === 'appt_reminder') {
-      if (oldReminderMarkers.some(m => body.includes(m)) || body.includes('Met vriendelijke groet,\n{salon}')) {
+      if (oldReminderMarkers.some(m => body.includes(m) || (tpl.subject || '').includes(m))
+        || body.includes('Met vriendelijke groet,\n{salon}')) {
         tpl.body = newReminderBody;
         tpl.subject = def.subject;
         tpl.name = def.name;
@@ -7314,6 +7344,7 @@ function migrateMessageTemplates(parsed) {
     }
   });
   defs.forEach(def => {
+    if (removed.has(def.key)) return;
     if (!parsed.messageTemplates.find(t => t.key === def.key)) {
       parsed.messageTemplates.push({ ...def });
     }
@@ -7321,7 +7352,7 @@ function migrateMessageTemplates(parsed) {
 }
 
 function defaultMessageTemplates() {
-  const reminderBody = appointmentMailBodyTemplate();
+  const reminderBody = reminderMailBodyTemplate();
   const confirmationBody = confirmationMailBodyTemplate();
   const tk = '\n\nVriendelijke groet,\n\n{salon_contact_naam}\n{salon}';
   return [
@@ -7344,8 +7375,8 @@ function defaultMessageTemplates() {
     {
       id: 'appt_reminder',
       key: 'appt_reminder',
-      name: 'Herinnering aan uw afspraak bij {salon}',
-      subject: 'Herinnering aan uw afspraak bij {salon}',
+      name: 'Herinnering aan je afspraak bij {salon}',
+      subject: 'Herinnering aan je afspraak bij {salon}',
       body: reminderBody,
       bcc: true
     },
